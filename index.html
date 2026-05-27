@@ -215,17 +215,7 @@ tfoot td.lft{text-align:left}
 .inv-meta-field input::placeholder{color:var(--td)}
 
 /* ── URL LOADER ──────────────────────────── */
-.url-loader{margin-top:14px;display:flex;flex-direction:column;align-items:center;gap:7px;width:100%;max-width:420px}
-.url-loader-row{display:flex;gap:7px;width:100%}
-.url-loader input{flex:1;background:var(--s3);border:1px solid var(--border);border-radius:var(--r);
-  padding:7px 11px;color:var(--text);font-size:.78rem;outline:none;transition:border-color .12s}
-.url-loader input:focus{border-color:var(--accent)}
-.url-loader input::placeholder{color:var(--td)}
-.url-loader .btn-url{padding:7px 14px;background:var(--accent);border:none;border-radius:var(--r);
-  color:#fff;font-size:.76rem;font-weight:700;cursor:pointer;white-space:nowrap}
-.url-loader .btn-url:hover{opacity:.85}
-.url-lbl{font-size:.64rem;color:var(--td);letter-spacing:.5px;text-transform:uppercase}
-.url-status{font-size:.7rem;color:var(--tm);min-height:14px}
+.url-status{font-size:.7rem;color:var(--tm);min-height:14px;margin-top:10px}
 /* ── TOAST ───────────────────────────────── */
 #toast{position:fixed;bottom:22px;right:22px;background:var(--s2);border:1px solid var(--border2);
   color:var(--text);padding:9px 16px;border-radius:var(--r);font-size:.8rem;opacity:0;
@@ -252,15 +242,7 @@ tfoot td.lft{text-align:left}
     <p>Supports <strong>Reliance.xlsx</strong> (Purchase Orders) &amp; <strong>mastersheet.xlsx</strong></p>
     <button class="btn-browse" onclick="document.getElementById('fi').click()">Browse File</button>
     <input type="file" id="fi" accept=".xlsx,.xls" style="display:none"/>
-    <div class="url-loader">
-      <span class="url-lbl">Or load from GitHub (paste raw URL once — auto-loads next time)</span>
-      <div class="url-loader-row">
-        <input type="text" id="src-url" placeholder="https://raw.githubusercontent.com/you/repo/main/data.xlsx">
-        <button class="btn-url" onclick="loadFromURL()">Load &amp; Save</button>
-      </div>
-      <span style="font-size:.65rem;color:var(--td);cursor:pointer;text-decoration:underline" onclick="localStorage.removeItem('srcExcelUrl');document.getElementById('src-url').value='';toast('Saved URL cleared')">clear saved URL</span>
-      <span class="url-status" id="url-status"></span>
-    </div>
+    <span class="url-status" id="url-status"></span>
   </div>
 </div>
 
@@ -508,33 +490,22 @@ function resetDash(){
   document.getElementById('dash').style.display='none';
   document.getElementById('up').style.display='flex';
   document.getElementById('fi').value='';
-  document.getElementById('url-status').textContent='';
   ALL=[];FD=[];Object.keys(SEL).forEach(k=>SEL[k]=[]);
 }
 
-/* Auto-load on page open from saved GitHub URL */
-window.addEventListener('load',()=>{
-  const saved=localStorage.getItem('srcExcelUrl');
-  if(saved){
-    document.getElementById('src-url').value=saved;
-    loadFromURL();
-  }
-});
+/* ══ DATA SOURCE ══════════════════════════════════════════════ */
+const DATA_URL='https://raw.githubusercontent.com/Devansh2602/Reliancepo/main/Reliance.xlsx';
 
-/* ══ URL LOADER (GitHub / hosted Excel) ══════════════════════ */
+window.addEventListener('load',()=>loadData());
 
-async function loadFromURL(){
-  const url=document.getElementById('src-url').value.trim();
-  if(!url){toast('Please paste a URL first.');return;}
-  localStorage.setItem('srcExcelUrl',url);
+async function loadData(){
   const st=document.getElementById('url-status');
-  st.textContent='Fetching…';
+  st.textContent='Loading data…';
   try{
-    const res=await fetch(url);
+    const res=await fetch(DATA_URL);
     if(!res.ok)throw new Error('HTTP '+res.status);
     const buf=await res.arrayBuffer();
-    const name=url.split('/').pop().split('?')[0]||'remote.xlsx';
-    document.getElementById('fname').textContent=name;
+    document.getElementById('fname').textContent='Reliance.xlsx';
     const wb=XLSX.read(new Uint8Array(buf),{type:'array'});
     const sn=
       wb.SheetNames.find(s=>/purchase\s*order/i.test(s))||
@@ -551,11 +522,11 @@ async function loadFromURL(){
     initDropdowns();applyF();
     document.getElementById('up').style.display='none';
     document.getElementById('dash').style.display='block';
-    st.textContent='✓ Loaded from URL';
-    toast(`✓ Loaded ${ALL.length.toLocaleString()} rows from "${sn}"`);
+    st.textContent='';
+    toast(`✓ Loaded ${ALL.length.toLocaleString()} rows`);
   }catch(e){
     st.textContent='Error: '+e.message;
-    toast('Failed to load from URL: '+e.message);
+    toast('Failed to load data: '+e.message);
   }
 }
 
