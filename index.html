@@ -380,6 +380,10 @@ tfoot td.lft{text-align:left}
           <label>HSN Code</label>
           <input type="text" id="inv-hsn" placeholder="e.g. 62034200">
         </div>
+        <div class="inv-meta-field">
+          <label>Pieces per Box</label>
+          <input type="number" id="inv-ppb" placeholder="e.g. 40" min="1" value="50">
+        </div>
       </div>
       <div style="overflow-x:auto">
         <table class="dtbl">
@@ -932,6 +936,7 @@ async function genExcel(){
   const dcCode=document.getElementById('inv-dc').value.trim();
   const fmtField=document.getElementById('inv-fmt').value.trim();
   const hsnOverride=document.getElementById('inv-hsn').value.trim();
+  const ppb=Math.max(1,+document.getElementById('inv-ppb').value||50);
   if(!invNum){toast('Please enter an Invoice Number.');return;}
   if(!asnNum){toast('Please enter an ASN Number.');return;}
 
@@ -957,18 +962,20 @@ async function genExcel(){
 
   // determine format type and compute total cartons
   const isRP=/RP|RATIO/i.test(fmtField);
+  const ppk=5; // pieces per ratio pack (1S+1M+1L+1XL+1XXL)
+  const packsPerCtn=Math.floor(ppb/ppk)||1; // for RP: how many packs fit in a box
   let totalCartons=0;
   if(isRP){
-    items.forEach(it=>{const pq=it.S||it.M||it.L||it.XL||it.XXL||0;if(pq)totalCartons+=Math.ceil(pq/10);});
+    items.forEach(it=>{const pq=it.S||it.M||it.L||it.XL||it.XXL||0;if(pq)totalCartons+=Math.ceil(pq/packsPerCtn);});
   }else{
-    items.forEach(it=>{['S','M','L','XL','XXL'].forEach(sz=>{const q=it[sz]||0;if(q)totalCartons+=Math.ceil(q/50);});});
+    items.forEach(it=>{['S','M','L','XL','XXL'].forEach(sz=>{const q=it[sz]||0;if(q)totalCartons+=Math.ceil(q/ppb);});});
   }
 
   // build style name from first item
   const styleName=items[0]?.desc||'';
 
   const P={items,invNum,asnNum,invDate:invDateFmt,dcCode,fmtField,
-    poNum,poDate,supplierCode,dcInfo,totalCartons,styleName};
+    poNum,poDate,supplierCode,dcInfo,totalCartons,styleName,ppb,packsPerCtn,ppk};
 
   const loc=dcCode==='S0EU'?'HARIPAL':dcCode==='SZAF'?'BANGALORE':'JHAJJAR';
   const b64=TEMPLATES[loc+'_'+(isRP?'RP':'DC')];
@@ -1143,7 +1150,7 @@ function fillRPInvSheet(wb,P){
 
 /* ─ DC PL- sheet ─ */
 function fillDCPLSheet(wb,P){
-  const {items,invNum,asnNum,invDate,dcCode,fmtField,poNum,poDate,supplierCode,totalCartons,styleName}=P;
+  const {items,invNum,asnNum,invDate,dcCode,fmtField,poNum,poDate,supplierCode,totalCartons,styleName,ppb}=P;
   const ws=wb.getWorksheet('PL-');
   if(!ws){console.error('No PL- sheet');return;}
   // header dynamic cells (same columns for all DC templates)
@@ -1169,13 +1176,13 @@ function fillDCPLSheet(wb,P){
     SIZES.forEach(sz=>{
       const qty=it[sz]||0;if(!qty)return;
       totS[sz]+=qty;totalPcs+=qty;
-      const nCtns=Math.ceil(qty/50),rem=qty%50;
+      const nCtns=Math.ceil(qty/ppb),rem=qty%ppb;
       const artCode=it[artK[sz]]||masterCode;      // PRODUCT_CODE per size
       const artEan=it[eanK[sz]]||artCode;           // per-size EAN for col3
       const artDesc=`${artCode}-${masterCode}`;     // artCode-masterCode for col4
       const firstDr=dr;
       for(let ci=0;ci<nCtns;ci++){
-        const isLast=ci===nCtns-1,cQty=isLast&&rem?rem:50;
+        const isLast=ci===nCtns-1,cQty=isLast&&rem?rem:ppb;
         ctnNo++;
         ws.getCell(dr,1).value=ctnNo;
         ws.getCell(dr,2).value=it.desc;
@@ -1225,10 +1232,10 @@ function fillDCPLSheet(wb,P){
 
 /* ─ RP PL sheet ─ */
 function fillRPPLSheet(wb,P){
-  const {items,invNum,asnNum,invDate,dcCode,fmtField,poNum,poDate,supplierCode,totalCartons,styleName,loc}=P;
+  const {items,invNum,asnNum,invDate,dcCode,fmtField,poNum,poDate,supplierCode,totalCartons,styleName,loc,ppb,packsPerCtn,ppk}=P;
   const ws=wb.getWorksheet('PL');
   if(!ws){console.error('No PL sheet');return;}
-  const ppk=5,pcsPerCtn=50,packsPerCtn=10;
+  const pcsPerCtn=ppb;
   // header dynamic cells
   ws.getCell(2,5).value=+supplierCode||supplierCode;
   ws.getCell(2,8).value=invNum;
@@ -1541,10 +1548,10 @@ function buildInvHTMLBody(P){
 
 /* ── PL- HTML body ──────────────────────────────────────── */
 function buildPLHTMLBody(P){
-  const {items,invNum,asnNum,invDate,dcCode,fmtField,poNum,poDate,supplierCode,dcInfo,styleName}=P;
+  const {items,invNum,asnNum,invDate,dcCode,fmtField,poNum,poDate,supplierCode,dcInfo,styleName,ppb}=P;
   const SIZES=['S','M','L','XL','XXL'];
   const artK={S:'artS',M:'artM',L:'artL',XL:'artXL',XXL:'artXXL'};
-  const MAX=50;
+  const MAX=ppb||50;
   let cNo=1,totPcs=0,totCtns=0;
   const CR=[];
   items.forEach(it=>{
