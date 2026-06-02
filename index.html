@@ -2067,10 +2067,10 @@ function trimWsRows(ws,firstUnused){
   }
 }
 
-// helper: apply thin all-around border + alignment to a cell
+// helper: apply alignment + font to a cell without touching borders
+// (template already has correct medium-weight distributed borders;
+//  overriding them with thin borders creates "half-border" artifacts)
 function _stickerStyle(cell,halign,bold,fontSize){
-  const T={style:'thin'};
-  cell.border={top:T,left:T,bottom:T,right:T};
   cell.alignment={horizontal:halign||'left',vertical:'middle',wrapText:false};
   if(bold!==undefined||fontSize!==undefined){
     const f=cell.font||{};
