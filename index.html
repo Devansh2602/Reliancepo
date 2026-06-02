@@ -8,6 +8,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 :root{
   --bg:#0d1117;--s1:#161b24;--s2:#1e2433;--s3:#252d3e;
@@ -221,6 +223,44 @@ tfoot td.lft{text-align:left}
   color:var(--text);padding:9px 16px;border-radius:var(--r);font-size:.8rem;opacity:0;
   transform:translateY(6px);transition:opacity .22s,transform .22s;z-index:9999;pointer-events:none;max-width:320px}
 #toast.show{opacity:1;transform:translateY(0)}
+
+/* ── PO DATABASE MODAL ────────────────────────────── */
+#mo-podb{position:fixed;inset:0;background:rgba(0,0,0,.82);backdrop-filter:blur(6px);
+  z-index:1100;display:none;align-items:center;justify-content:center;padding:18px}
+#mo-podb.open{display:flex}
+.podb-modal{background:var(--s1);border:1px solid var(--border2);border-radius:var(--r2);
+  width:100%;max-width:860px;max-height:90vh;display:flex;flex-direction:column;
+  box-shadow:0 24px 70px rgba(0,0,0,.7)}
+.podb-hdr{padding:15px 20px;border-bottom:1px solid var(--border);display:flex;
+  align-items:center;justify-content:space-between;flex-shrink:0;gap:10px}
+.podb-hdr h2{font-size:.95rem;font-weight:700}
+.podb-body{overflow-y:auto;flex:1;padding:16px 20px;display:flex;flex-direction:column;gap:14px}
+.podb-section{background:var(--s2);border:1px solid var(--border);border-radius:var(--r);padding:14px}
+.podb-section h3{font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;
+  color:var(--tm);margin-bottom:10px}
+.podb-drive-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.podb-inp{flex:1;min-width:180px;background:var(--s3);border:1px solid var(--border);
+  border-radius:var(--r);padding:7px 10px;color:var(--text);font-size:.82rem;outline:none;
+  transition:border-color .12s}
+.podb-inp:focus{border-color:var(--accent)}
+.podb-inp::placeholder{color:var(--td)}
+.btn-podb{padding:7px 16px;border:none;border-radius:var(--r);font-size:.78rem;font-weight:600;
+  cursor:pointer;transition:opacity .13s;white-space:nowrap}
+.btn-podb:hover{opacity:.85}
+.btn-podb-connect{background:var(--accent);color:#fff}
+.btn-podb-sync{background:var(--green);color:#1a2620}
+.btn-podb-upload{background:var(--s3);border:1px solid var(--border2);color:var(--text)}
+.podb-status{font-size:.74rem;color:var(--tm);margin-top:6px;min-height:16px}
+.podb-tbl{width:100%;border-collapse:collapse;font-size:.78rem}
+.podb-tbl thead th{background:var(--s2);color:var(--tm);font-size:.67rem;text-transform:uppercase;
+  letter-spacing:.7px;padding:7px 10px;text-align:left;border-bottom:1px solid var(--border);font-weight:600}
+.podb-tbl tbody tr{border-bottom:1px solid rgba(42,50,72,.35)}
+.podb-tbl tbody tr:hover{background:rgba(79,126,247,.04)}
+.podb-tbl tbody td{padding:7px 10px;vertical-align:middle}
+.podb-badge{display:inline-block;padding:2px 7px;border-radius:4px;font-size:.66rem;font-weight:700;
+  background:rgba(79,126,247,.15);color:var(--accent)}
+.podb-note{font-size:.72rem;color:var(--td);padding:6px 0;line-height:1.6}
+.podb-note a{color:var(--accent);text-decoration:none}
 </style>
 </head>
 <body>
@@ -251,7 +291,10 @@ tfoot td.lft{text-align:left}
   <div class="hdr">
     <div class="hdr-side"><span class="hdr-file" id="fname"></span></div>
     <h1>UNITED × RELIANCE</h1>
-    <div class="hdr-side"><button class="btn-sm" onclick="resetDash()">↑ Upload New</button></div>
+    <div class="hdr-side" style="gap:8px">
+      <button class="btn-sm" onclick="openPODB()" style="border-color:rgba(79,126,247,.4);color:var(--accent)">🗄 PO Database</button>
+      <button class="btn-sm" onclick="resetDash()">↑ Upload New</button>
+    </div>
   </div>
 
   <!-- Filter bar — 5 multi-select cascading dropdowns -->
@@ -420,6 +463,78 @@ tfoot td.lft{text-align:left}
         <button class="btn-gpdf" style="background:#0ea5e9" onclick="genCtnSticker()">⬇ Carton Sticker</button>
         <button class="btn-gpdf" style="background:#8b5cf6" onclick="genSummary()">⬇ Summary</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ PO DATABASE MODAL ══════════════════════════════════════ -->
+<div id="mo-podb">
+  <div class="podb-modal">
+    <div class="podb-hdr">
+      <div>
+        <h2>🗄 PO Database</h2>
+        <div style="font-size:.72rem;color:var(--tm);margin-top:2px">
+          Sync Reliance PO PDFs → extract HSN &amp; MRP → auto-fill invoices
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span id="podb-count" style="font-size:.72rem;color:var(--tm);background:var(--s2);padding:3px 10px;border-radius:20px;border:1px solid var(--border)">0 POs</span>
+        <button class="mclose" onclick="closePODB()">✕</button>
+      </div>
+    </div>
+    <div class="podb-body">
+
+      <!-- Option A: Google Drive sync -->
+      <div class="podb-section">
+        <h3>🔗 Sync from Google Drive</h3>
+        <div class="podb-drive-row">
+          <button class="btn-podb btn-podb-connect" id="btn-gdr-connect" onclick="connectDrive()">Connect Google Drive</button>
+          <span id="gdr-status" style="font-size:.75rem;color:var(--tm)">Not connected</span>
+        </div>
+        <div class="podb-drive-row" style="margin-top:8px">
+          <input class="podb-inp" id="gdr-folder" placeholder="Paste Google Drive Folder ID (e.g. 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs)">
+          <button class="btn-podb btn-podb-sync" id="btn-gdr-sync" onclick="syncFromDrive()" disabled>⟳ Sync Folder</button>
+        </div>
+        <div class="podb-status" id="gdr-sync-status"></div>
+        <div class="podb-note">
+          <strong>How to get folder ID:</strong> Open the folder in Google Drive → copy the part after /folders/ in the URL.<br>
+          ⚠ Google OAuth requires serving via <strong>http://localhost</strong>. Open a terminal and run:
+          <code style="background:var(--s3);padding:1px 5px;border-radius:3px;font-size:.7rem">python3 -m http.server 8080</code>
+          then open <a href="http://localhost:8080" target="_blank">http://localhost:8080</a>
+        </div>
+      </div>
+
+      <!-- Option B: Upload local PDFs -->
+      <div class="podb-section">
+        <h3>📁 Upload PDFs Manually</h3>
+        <div class="podb-drive-row">
+          <button class="btn-podb btn-podb-upload" onclick="uploadLocalPDFs()">Choose PDF Files…</button>
+          <span style="font-size:.74rem;color:var(--tm)">Select one or more Reliance PO PDFs from your computer</span>
+        </div>
+        <div class="podb-status" id="local-pdf-status"></div>
+      </div>
+
+      <!-- Stored POs table -->
+      <div class="podb-section">
+        <h3>📋 Stored POs</h3>
+        <div style="overflow-x:auto">
+          <table class="podb-tbl">
+            <thead><tr>
+              <th>PO Number</th>
+              <th>HSN Code</th>
+              <th>MRP (₹)</th>
+              <th>Style</th>
+              <th>Site</th>
+              <th>File</th>
+              <th style="width:40px"></th>
+            </tr></thead>
+            <tbody id="podb-tbody">
+              <tr><td colspan="7" style="text-align:center;padding:20px;color:var(--tm)">No POs stored yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
     </div>
   </div>
 </div>
@@ -834,6 +949,8 @@ function openModal(){
       artS:'',artM:'',artL:'',artXL:'',artXXL:'',
       // per-size EAN codes
       eanS:'',eanM:'',eanL:'',eanXL:'',eanXXL:'',
+      // per-size product descriptions (full PRODUCT_DESCRIPTION from each size row)
+      pdescS:'',pdescM:'',pdescL:'',pdescXL:'',pdescXXL:'',
       dcCode:r['DC_CODE']||'',
       orderType:r['Order type']||'',
       location:r._loc||''
@@ -842,11 +959,12 @@ function openModal(){
     const pc=String(r['PRODUCT_CODE']||'');
     const en=String(r['EAN_NO']||'');
     const s=+r.S||0,m=+r.M||0,l=+r.L||0,xl=+r.XL||0,xxl=+r.XXL||0;
-    if(s>0&&!im[k].artS){im[k].artS=pc;if(en)im[k].eanS=en;}
-    if(m>0&&!im[k].artM){im[k].artM=pc;if(en)im[k].eanM=en;}
-    if(l>0&&!im[k].artL){im[k].artL=pc;if(en)im[k].eanL=en;}
-    if(xl>0&&!im[k].artXL){im[k].artXL=pc;if(en)im[k].eanXL=en;}
-    if(xxl>0&&!im[k].artXXL){im[k].artXXL=pc;if(en)im[k].eanXXL=en;}
+    const pd=String(r['PRODUCT_DESCRIPTION']||'');
+    if(s>0&&!im[k].artS){im[k].artS=pc;if(en)im[k].eanS=en;if(pd)im[k].pdescS=pd;}
+    if(m>0&&!im[k].artM){im[k].artM=pc;if(en)im[k].eanM=en;if(pd)im[k].pdescM=pd;}
+    if(l>0&&!im[k].artL){im[k].artL=pc;if(en)im[k].eanL=en;if(pd)im[k].pdescL=pd;}
+    if(xl>0&&!im[k].artXL){im[k].artXL=pc;if(en)im[k].eanXL=en;if(pd)im[k].pdescXL=pd;}
+    if(xxl>0&&!im[k].artXXL){im[k].artXXL=pc;if(en)im[k].eanXXL=en;if(pd)im[k].pdescXXL=pd;}
     if(!im[k].prodDesc){
       const _d=String(r['PRODUCT_DESCRIPTION']||'');
       const _p=_d.split(', ');
@@ -888,6 +1006,8 @@ function openModal(){
   document.getElementById('db').querySelectorAll('.qinp').forEach(inp=>inp.addEventListener('input',updModal));
   updModal();
   document.getElementById('mo').classList.add('open');
+  // Auto-fill HSN from PO database
+  autoFillHSNFromDB(String((FD[0]||{})['PURCH_ORDER_NUMBER']||'').trim());
 }
 
 function updModal(){
@@ -977,6 +1097,15 @@ async function genExcel(){
 
   const f0=FD[0]||{};
   const poNum=String(f0['PURCH_ORDER_NUMBER']||'');
+
+  // Silent MRP lookup from PO database (overrides spreadsheet MRP if found)
+  try{
+    const _poRec=await _dbGet(poNum);
+    if(_poRec&&_poRec.mrp){
+      const _mrpVal=parseFloat(String(_poRec.mrp).replace(/,/g,''))||0;
+      if(_mrpVal>0)items.forEach(it=>{it.mrp=_mrpVal;});
+    }
+  }catch(_e){console.warn('PO DB MRP lookup:',_e);}
   const poDate=String(f0['PURCH_ORDER_DATE']||'');
   const supplierCode=String(f0['SUPPLIER_CODE']||'10337044');
   const dcInfo=DC_INFO[dcCode]||{l1:'',l2:'',l3:'',l4:'',l5:'',l6:'',gstin:'',dcName:'',state:''};
@@ -1138,8 +1267,8 @@ function fillRPInvSheet(wb,P){
   items.forEach(it=>{
     const qty=it.S||it.M||it.L||it.XL||it.XXL||0;if(!qty)return;
     const art=String(it.artS||it.masterCode||'');
-    const styleNo=it.masterCode||it.desc||'';
-    const prodDesc=`${it.ean||it.artS||it.masterCode||''} ${it.colour}(RP)`;
+    const styleNo=it.desc||it.masterCode||'';  // Style No. = SKU
+    const prodDesc=it.pdescS||it.prodDesc||it.desc||'';
     const rate=it.cu,amt=qty*ppk*rate;
     const igstA=amt*igstRate,totA=amt+igstA;
     subQty+=qty;subAmt+=amt;
@@ -1189,7 +1318,7 @@ function fillDCPLSheet(wb,P){
   // build carton rows
   const SIZES=['S','M','L','XL','XXL'];
   const artK={S:'artS',M:'artM',L:'artL',XL:'artXL',XXL:'artXXL'};
-  const eanK={S:'eanS',M:'eanM',L:'eanL',XL:'eanXL',XXL:'eanXXL'};
+  const pdescK={S:'pdescS',M:'pdescM',L:'pdescL',XL:'pdescXL',XXL:'pdescXXL'};
   let dr=26,ctnNo=0,totalPcs=0;
   const totS={S:0,M:0,L:0,XL:0,XXL:0};
   items.forEach(it=>{
@@ -1198,9 +1327,9 @@ function fillDCPLSheet(wb,P){
       const qty=it[sz]||0;if(!qty)return;
       totS[sz]+=qty;totalPcs+=qty;
       const nCtns=Math.ceil(qty/ppb),rem=qty%ppb;
-      const artCode=it[artK[sz]]||masterCode;      // PRODUCT_CODE per size
-      const artEan=it[eanK[sz]]||artCode;           // per-size EAN for col3
-      const artDesc=`${artCode}-${masterCode}`;     // artCode-masterCode for col4
+      const artCode=it[artK[sz]]||masterCode;                      // PRODUCT_CODE per size
+      const artEan=artCode;                                         // col3 = Article No. = Product Code
+      const artDesc=it[pdescK[sz]]||it.prodDesc||it.desc||'';      // col4 = Product Description
       const firstDr=dr;
       for(let ci=0;ci<nCtns;ci++){
         const isLast=ci===nCtns-1,cQty=isLast&&rem?rem:ppb;
@@ -1222,7 +1351,7 @@ function fillDCPLSheet(wb,P){
     });
   });
   // auto-fit Product Description col4 (DC PL)
-  const _pd4dc=Math.max(20,...items.map(it=>String(`${it[artK?.S]||it.masterCode||''}-${it.masterCode||''}`).length));
+  const _pd4dc=Math.max(20,...items.map(it=>String(it.pdescS||it.prodDesc||it.desc||'').length));
   ws.getColumn(4).width=Math.min(45,_pd4dc*1.15+2);
   // TOTAL row at 53
   ws.getCell(53,7).value=totalPcs;
@@ -1286,10 +1415,13 @@ function fillRPPLSheet(wb,P){
     totalPcs+=packQty*ppk;
     SIZES.forEach(sz=>totS[sz]+=packQty);
     const masterArt=it.masterCode||it.artS||'';
-    const eanK2={S:'eanS',M:'eanM',L:'eanL',XL:'eanXL',XXL:'eanXXL'};
-    const sizeEan=sz=>it[eanK2[sz]]||it[artK[sz]]||masterArt;  // col3: per-size EAN
-    const sizeDesc=sz=>it.desc||masterArt;                       // col4: Style Code No. (same as col2)
-    const hdrDesc=`${it.ean||masterArt} ${it.colour}(RP)`;       // col4 header: base EAN colour(RP)
+    const pdescK2={S:'pdescS',M:'pdescM',L:'pdescL',XL:'pdescXL',XXL:'pdescXXL'};
+    // col3 = Article No. = per-size PRODUCT_CODE
+    const sizeArt=sz=>it[artK[sz]]||masterArt;
+    // col4 = Product Description: per-size full PRODUCT_DESCRIPTION from excel
+    const sizeDesc=sz=>it[pdescK2[sz]]||it.pdescS||it.prodDesc||it.desc||'';
+    // col4 header row = first 2 dash-segments of PRODUCT_DESCRIPTION + "-" + SKU
+    const hdrDesc=it.pdescS||it.prodDesc||it.desc||'';
     // bulk group header row
     // BANGALORE: carton# in header; HARIPAL/JHAJJAR: carton# in S row
     if(loc==='BANGALORE')ws.getCell(dr,1).value=fullCtns;
@@ -1298,14 +1430,14 @@ function fillRPPLSheet(wb,P){
     dr++;
     // S row (bulk)
     if(loc!=='BANGALORE')ws.getCell(dr,1).value=fullCtns;
-    ws.getCell(dr,2).value=it.desc;ws.getCell(dr,3).value=sizeEan('S');
+    ws.getCell(dr,2).value=it.desc;ws.getCell(dr,3).value=sizeArt('S');
     ws.getCell(dr,4).value=sizeDesc('S');ws.getCell(dr,5).value=it.colour;ws.getCell(dr,6).value='S';
     ws.getCell(dr,7).value=packsPerCtn;ws.getCell(dr,8).value=pcsPerCtn;
     ws.getCell(dr,9).value=fullCtns;ws.getCell(dr,10).value=fullCtns*pcsPerCtn;
     dr++;
     // M,L,XL,XXL bulk rows
     ['M','L','XL','XXL'].forEach(sz=>{
-      ws.getCell(dr,2).value=it.desc;ws.getCell(dr,3).value=sizeEan(sz);
+      ws.getCell(dr,2).value=it.desc;ws.getCell(dr,3).value=sizeArt(sz);
       ws.getCell(dr,4).value=sizeDesc(sz);ws.getCell(dr,5).value=it.colour;ws.getCell(dr,6).value=sz;
       ws.getCell(dr,7).value=packsPerCtn;
       dr++;
@@ -1321,14 +1453,14 @@ function fillRPPLSheet(wb,P){
       dr++;
       // S row (remainder)
       if(loc==='JHAJJAR')ws.getCell(dr,1).value=1;
-      ws.getCell(dr,2).value=it.desc;ws.getCell(dr,3).value=sizeEan('S');
+      ws.getCell(dr,2).value=it.desc;ws.getCell(dr,3).value=sizeArt('S');
       ws.getCell(dr,4).value=sizeDesc('S');ws.getCell(dr,5).value=it.colour;ws.getCell(dr,6).value='S';
       ws.getCell(dr,7).value=remPacks;ws.getCell(dr,8).value=remPacks*ppk;
       ws.getCell(dr,9).value=1;ws.getCell(dr,10).value=remPacks*ppk;
       dr++;
       // M,L,XL,XXL remainder rows
       ['M','L','XL','XXL'].forEach(sz=>{
-        ws.getCell(dr,2).value=it.desc;ws.getCell(dr,3).value=sizeEan(sz);
+        ws.getCell(dr,2).value=it.desc;ws.getCell(dr,3).value=sizeArt(sz);
         ws.getCell(dr,4).value=sizeDesc(sz);ws.getCell(dr,5).value=it.colour;ws.getCell(dr,6).value=sz;
         ws.getCell(dr,7).value=remPacks;
         dr++;
@@ -2059,6 +2191,265 @@ async function genSummary(){
 function fmt(n){return Number(n).toLocaleString('en-IN');}
 function fc(n){return Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});}
 function set(id,v){const e=document.getElementById(id);if(e)e.textContent=v;}
+
+/* ══════════════════════════════════════════════════════════════
+   PO DATABASE  —  IndexedDB + Google Drive + PDF.js parsing
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── Configure PDF.js worker ── */
+(function(){
+  if(typeof pdfjsLib!=='undefined'){
+    pdfjsLib.GlobalWorkerOptions.workerSrc=
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+})();
+
+/* ── IndexedDB helpers ── */
+const _PO_DB_NAME='unitedReliancePODB', _PO_DB_VER=1;
+let _poDb=null;
+
+function _openPODb(){
+  return new Promise((res,rej)=>{
+    if(_poDb)return res(_poDb);
+    const req=indexedDB.open(_PO_DB_NAME,_PO_DB_VER);
+    req.onupgradeneeded=e=>{
+      const db=e.target.result;
+      if(!db.objectStoreNames.contains('pos'))
+        db.createObjectStore('pos',{keyPath:'poNum'});
+    };
+    req.onsuccess=e=>{_poDb=e.target.result;res(_poDb);};
+    req.onerror=e=>rej(e.target.error);
+  });
+}
+async function _dbPut(rec){
+  const db=await _openPODb();
+  return new Promise((res,rej)=>{
+    const tx=db.transaction('pos','readwrite');
+    tx.objectStore('pos').put(rec);
+    tx.oncomplete=()=>res();tx.onerror=e=>rej(e.target.error);
+  });
+}
+async function _dbGet(poNum){
+  const db=await _openPODb();
+  return new Promise((res,rej)=>{
+    const req=db.transaction('pos','readonly').objectStore('pos').get(poNum);
+    req.onsuccess=()=>res(req.result);req.onerror=e=>rej(e.target.error);
+  });
+}
+async function _dbGetAll(){
+  const db=await _openPODb();
+  return new Promise((res,rej)=>{
+    const req=db.transaction('pos','readonly').objectStore('pos').getAll();
+    req.onsuccess=()=>res(req.result);req.onerror=e=>rej(e.target.error);
+  });
+}
+async function _dbDel(poNum){
+  const db=await _openPODb();
+  return new Promise((res,rej)=>{
+    const tx=db.transaction('pos','readwrite');
+    tx.objectStore('pos').delete(poNum);
+    tx.oncomplete=()=>res();tx.onerror=e=>rej(e.target.error);
+  });
+}
+
+/* ── PDF Parsing ── */
+async function _parsePOPdf(arrayBuffer){
+  if(typeof pdfjsLib==='undefined')throw new Error('PDF.js not loaded yet');
+  const pdf=await pdfjsLib.getDocument({data:arrayBuffer}).promise;
+  let text='';
+  for(let p=1;p<=Math.min(pdf.numPages,6);p++){
+    const page=await pdf.getPage(p);
+    const content=await page.getTextContent();
+    text+=content.items.map(i=>i.str).join(' ')+'\n';
+  }
+
+  // PO Number: "Number : 5114434866" or 10-digit starting with 51/45/41
+  const poM=text.match(/Number\s*:\s*(\d{10})/i)||text.match(/\b((?:51|45|41)\d{8})\b/);
+  const poNum=poM?poM[1]:null;
+
+  // HSN: labeled "HSN" near an 8-digit number
+  const hsnM=text.match(/HSN[^0-9]{0,20}(\d{8})/i)||text.match(/\b(\d{8})\b/);
+  const hsn=hsnM?hsnM[1]:null;
+
+  // MRP: "MRP" followed by digits, or the pattern ₹/Rs. + number
+  const mrpM=text.match(/\bMRP\b[^0-9]{0,10}([\d,]+\.?\d*)/i)||
+             text.match(/(?:Rs\.?|₹)\s*([\d,]+\.\d{2})/)||
+             text.match(/(\d{3,4}\.\d{2})\s*(?:per|\/)?/);
+  const mrp=mrpM?(mrpM[1].replace(/,/g,'')):null;
+
+  // Style: Vendor Article No. (alphanumeric, typically 14+ chars)
+  const styleM=text.match(/(?:Vendor\s+Article|Article\s+No\.?)[^A-Z0-9]{0,10}([A-Z0-9]{8,})/i);
+  const style=styleM?styleM[1]:null;
+
+  // Site code: 4-char code like S0EU / SAEX / SZAF
+  const siteM=text.match(/\b(S(?:0EU|AEX|ZAF|[A-Z0-9]{3}))\b/);
+  const site=siteM?siteM[1]:null;
+
+  return{poNum,hsn,mrp,style,site};
+}
+
+/* ── Google Drive auth ── */
+const _GDR_CLIENT_ID='251584382774-mhdcndq3l80enqd709cp024d7u3oucob.apps.googleusercontent.com';
+const _GDR_SCOPE='https://www.googleapis.com/auth/drive.readonly';
+let _gdrToken=null, _gdrTokenClient=null;
+
+function connectDrive(){
+  if(typeof google==='undefined'||!google.accounts){
+    toast('Google auth not loaded yet — wait a moment and try again.');return;
+  }
+  if(!_gdrTokenClient){
+    _gdrTokenClient=google.accounts.oauth2.initTokenClient({
+      client_id:_GDR_CLIENT_ID,scope:_GDR_SCOPE,
+      callback:resp=>{
+        if(resp.error){toast('Drive auth failed: '+resp.error);return;}
+        _gdrToken=resp.access_token;
+        const st=document.getElementById('gdr-status');
+        if(st){st.textContent='✓ Connected';st.style.color='var(--green)';}
+        const sb=document.getElementById('btn-gdr-sync');if(sb)sb.disabled=false;
+      }
+    });
+  }
+  _gdrTokenClient.requestAccessToken();
+}
+
+async function _driveList(folderId){
+  const q=`'${folderId}' in parents and mimeType='application/pdf' and trashed=false`;
+  const r=await fetch(
+    `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&pageSize=200`,
+    {headers:{Authorization:`Bearer ${_gdrToken}`}}
+  );
+  if(!r.ok)throw new Error('Drive list error '+r.status);
+  return(await r.json()).files||[];
+}
+
+async function _driveGet(fileId){
+  const r=await fetch(
+    `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+    {headers:{Authorization:`Bearer ${_gdrToken}`}}
+  );
+  if(!r.ok)throw new Error('Drive download error '+r.status);
+  return r.arrayBuffer();
+}
+
+async function syncFromDrive(){
+  const folderId=(document.getElementById('gdr-folder')||{}).value?.trim();
+  if(!folderId){toast('Enter a folder ID first.');return;}
+  if(!_gdrToken){toast('Connect to Google Drive first.');return;}
+  const stEl=document.getElementById('gdr-sync-status');
+  const setS=msg=>{if(stEl)stEl.textContent=msg;};
+  setS('Fetching file list…');
+  try{
+    const files=await _driveList(folderId);
+    if(!files.length){setS('No PDF files found in that folder.');return;}
+    setS(`Found ${files.length} PDF${files.length>1?'s':''} — processing…`);
+    let ok=0,skip=0;
+    for(const f of files){
+      try{
+        const buf=await _driveGet(f.id);
+        const parsed=await _parsePOPdf(buf);
+        if(parsed.poNum){
+          await _dbPut({poNum:parsed.poNum,hsn:parsed.hsn||'',mrp:parsed.mrp||'',
+            style:parsed.style||'',site:parsed.site||'',
+            fileName:f.name,syncDate:new Date().toLocaleDateString('en-IN')});
+          ok++;
+        }else skip++;
+      }catch(e){skip++;console.warn('PDF parse error',f.name,e);}
+      setS(`Processing… ${ok+skip}/${files.length}`);
+    }
+    setS(`✓ Done — ${ok} PO${ok!==1?'s':''} saved, ${skip} skipped.`);
+    await _renderPODBTable();
+  }catch(e){setS('Error: '+e.message);toast('Sync failed: '+e.message);}
+}
+
+/* ── Local PDF upload ── */
+async function uploadLocalPDFs(){
+  const inp=document.createElement('input');
+  inp.type='file';inp.accept='application/pdf';inp.multiple=true;
+  inp.onchange=async()=>{
+    const files=Array.from(inp.files);if(!files.length)return;
+    const stEl=document.getElementById('local-pdf-status');
+    const setS=msg=>{if(stEl)stEl.textContent=msg;};
+    setS(`Processing ${files.length} file${files.length>1?'s':''}…`);
+    let ok=0,skip=0;
+    for(const f of files){
+      try{
+        const buf=await f.arrayBuffer();
+        const parsed=await _parsePOPdf(buf);
+        if(parsed.poNum){
+          await _dbPut({poNum:parsed.poNum,hsn:parsed.hsn||'',mrp:parsed.mrp||'',
+            style:parsed.style||'',site:parsed.site||'',
+            fileName:f.name,syncDate:new Date().toLocaleDateString('en-IN')});
+          ok++;
+        }else{skip++;console.warn('No PO number found in',f.name);}
+      }catch(e){skip++;console.warn('Error parsing',f.name,e);}
+    }
+    setS(`✓ ${ok} PO${ok!==1?'s':''} saved${skip?', '+skip+' skipped':''}.`);
+    toast(`✓ ${ok} PO${ok!==1?'s':''} added to database`);
+    await _renderPODBTable();
+  };
+  inp.click();
+}
+
+/* ── Render table ── */
+async function _renderPODBTable(){
+  const rows=await _dbGetAll();
+  const tbody=document.getElementById('podb-tbody');
+  const cnt=document.getElementById('podb-count');
+  if(cnt)cnt.textContent=rows.length+' PO'+(rows.length!==1?'s':'');
+  if(!tbody)return;
+  if(!rows.length){
+    tbody.innerHTML='<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--tm)">No POs stored yet. Sync from Drive or upload PDFs above.</td></tr>';
+    return;
+  }
+  // Sort newest entry last by poNum descending
+  rows.sort((a,b)=>b.poNum.localeCompare(a.poNum));
+  tbody.innerHTML=rows.map(r=>`
+    <tr>
+      <td><span class="podb-badge">${r.poNum}</span></td>
+      <td>${r.hsn||'<span style="color:var(--td)">—</span>'}</td>
+      <td>${r.mrp?'₹'+r.mrp:'<span style="color:var(--td)">—</span>'}</td>
+      <td style="font-size:.73rem">${r.style||'—'}</td>
+      <td>${r.site||'—'}</td>
+      <td class="dim" style="font-size:.7rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+          title="${r.fileName||''}">${r.fileName||'—'}</td>
+      <td><button class="btn-sm" style="color:var(--red);border-color:rgba(248,113,113,.3);font-size:.7rem;padding:3px 8px"
+          onclick="deletePOEntry('${r.poNum}')">✕</button></td>
+    </tr>`).join('');
+}
+
+async function deletePOEntry(poNum){
+  await _dbDel(poNum);
+  await _renderPODBTable();
+  toast('Removed PO '+poNum+' from database.');
+}
+
+/* ── Modal open/close ── */
+async function openPODB(){
+  await _openPODb();
+  document.getElementById('mo-podb').classList.add('open');
+  await _renderPODBTable();
+}
+function closePODB(){document.getElementById('mo-podb').classList.remove('open');}
+document.getElementById('mo-podb').addEventListener('click',e=>{
+  if(e.target===document.getElementById('mo-podb'))closePODB();
+});
+
+/* ── Auto-fill HSN when invoice modal opens ── */
+async function autoFillHSNFromDB(poNum){
+  if(!poNum)return;
+  try{
+    const rec=await _dbGet(poNum);
+    if(rec&&rec.hsn){
+      const el=document.getElementById('inv-hsn');
+      if(el&&!el.value){
+        el.value=rec.hsn;
+        el.style.borderColor='var(--green)';
+        setTimeout(()=>{el.style.borderColor='';},2500);
+        toast(`✓ HSN ${rec.hsn} auto-filled from PO database`);
+      }
+    }
+  }catch(e){console.warn('PO DB auto-fill failed:',e);}
+}
 
 </script>
 </body>
