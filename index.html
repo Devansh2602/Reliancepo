@@ -951,6 +951,10 @@ function openModal(){
       eanS:'',eanM:'',eanL:'',eanXL:'',eanXXL:'',
       // per-size product descriptions (full PRODUCT_DESCRIPTION from each size row)
       pdescS:'',pdescM:'',pdescL:'',pdescXL:'',pdescXXL:'',
+      // RP description = part before first ', ' in PRODUCT_DESCRIPTION (e.g. "KRTS-APWN26-GETKRTSFUT6125")
+      rpDesc:'',
+      // RP DESCRPTION column (col 34) — word-hyphen format e.g. "SKD-APWN26-GETCRDSFUT6207"
+      rpDescCol:'',
       dcCode:r['DC_CODE']||'',
       orderType:r['Order type']||'',
       location:r._loc||''
@@ -960,6 +964,9 @@ function openModal(){
     const en=String(r['EAN_NO']||'');
     const s=+r.S||0,m=+r.M||0,l=+r.L||0,xl=+r.XL||0,xxl=+r.XXL||0;
     const pd=String(r['PRODUCT_DESCRIPTION']||'');
+    // extract RP description = everything before first ', ' (same for all sizes of same article)
+    if(pd&&!im[k].rpDesc)im[k].rpDesc=pd.split(', ')[0]||pd;
+    if(!im[k].rpDescCol&&r['RP DESCRPTION'])im[k].rpDescCol=String(r['RP DESCRPTION']||'');
     if(s>0&&!im[k].artS){im[k].artS=pc;if(en)im[k].eanS=en;if(pd)im[k].pdescS=pd;}
     if(m>0&&!im[k].artM){im[k].artM=pc;if(en)im[k].eanM=en;if(pd)im[k].pdescM=pd;}
     if(l>0&&!im[k].artL){im[k].artL=pc;if(en)im[k].eanL=en;if(pd)im[k].pdescL=pd;}
@@ -1216,13 +1223,17 @@ function fillDCInvSheet(wb,P){
       sr++;
     });
   });
+  const _dcLastDr=25+LI.length-1;
   LI.forEach((li,idx)=>{
     const r=25+idx;
     ws.getCell(r,1).value=li.sr;ws.getCell(r,2).value=li.hsn;ws.getCell(r,3).value=li.art;
     ws.getCell(r,4).value=li.style;ws.getCell(r,5).value=li.desc;ws.getCell(r,6).value=li.colour;
     ws.getCell(r,7).value=li.sz;ws.getCell(r,8).value=li.qty;ws.getCell(r,9).value='PCS';
-    ws.getCell(r,10).value=li.rate;ws.getCell(r,11).value=li.amt;
-    ws.getCell(r,12).value=Math.round(li.igstP*100)+'%';ws.getCell(r,13).value=li.igstA;ws.getCell(r,14).value=li.totA;
+    ws.getCell(r,10).value=li.rate;                             // J = Rate (editable)
+    ws.getCell(r,11).value={formula:`H${r}*J${r}`};            // K = Amount (auto)
+    ws.getCell(r,12).value=li.igstP;ws.getCell(r,12).numFmt='0%'; // L = IGST% decimal (editable)
+    ws.getCell(r,13).value={formula:`K${r}*L${r}`};            // M = IGST Amount (auto)
+    ws.getCell(r,14).value={formula:`K${r}+M${r}`};            // N = Total (auto)
   });
   // auto-fit Product Description col5
   const _pd5=Math.max(20,...LI.map(l=>String(l.desc||'').length));
@@ -1232,11 +1243,15 @@ function fillDCInvSheet(wb,P){
   const totIGST=LI.reduce((s,l)=>s+l.igstA,0);
   const grand=Math.round(subAmt+totIGST);
   const igstPct=((items[0]?.tax)||5).toFixed(1);
-  // footer
-  ws.getCell(40,8).value=subQty;ws.getCell(40,11).value=subAmt;
-  ws.getCell(41,6).value='IGST@'+igstPct+'%';ws.getCell(41,11).value=totIGST;ws.getCell(41,13).value=totIGST;
-  ws.getCell(45,8).value=subQty;ws.getCell(45,9).value='Pcs';ws.getCell(45,11).value=grand;
-  ws.getCell(46,4).value=numToWordsIN(grand);
+  // footer — fully formula-based (change qty/rate → everything recalculates)
+  ws.getCell(40,8).value={formula:`SUM(H25:H${_dcLastDr})`};   // total qty
+  ws.getCell(40,11).value={formula:`SUM(K25:K${_dcLastDr})`};  // subtotal amount
+  ws.getCell(41,6).value='IGST@'+igstPct+'%';
+  ws.getCell(41,11).value={formula:`SUM(M25:M${_dcLastDr})`};  // IGST total
+  ws.getCell(41,13).value={formula:`K41`};
+  ws.getCell(45,8).value={formula:`H40`};ws.getCell(45,9).value='Pcs';
+  ws.getCell(45,11).value={formula:`ROUND(K40+K41,0)`};        // grand total
+  ws.getCell(46,4).value=numToWordsIN(grand);   // words — static (Excel has no built-in)
   ws.getCell(47,4).value=numToWordsIN(totIGST);
 }
 
@@ -1276,13 +1291,17 @@ function fillRPInvSheet(wb,P){
              qty,mrp:it.mrp||0,rate,amt,igstP:igstRate,igstA,totA});
     sr++;
   });
+  const _rpLastDr=24+LI.length-1;
   LI.forEach((li,idx)=>{
     const r=24+idx;
     ws.getCell(r,1).value=li.sr;ws.getCell(r,2).value=li.hsn;ws.getCell(r,3).value=li.art;
     ws.getCell(r,4).value=li.style;ws.getCell(r,5).value=li.desc;ws.getCell(r,6).value=li.colour;
     ws.getCell(r,7).value='RP';ws.getCell(r,8).value=li.qty;ws.getCell(r,9).value=li.mrp;
-    ws.getCell(r,10).value=li.rate;ws.getCell(r,11).value=li.amt;
-    ws.getCell(r,12).value=Math.round(li.igstP*100)+'%';ws.getCell(r,13).value=li.igstA;ws.getCell(r,14).value=li.totA;
+    ws.getCell(r,10).value=li.rate;                              // J = Rate (editable)
+    ws.getCell(r,11).value={formula:`H${r}*5*J${r}`};           // K = Amount (qty×5pcs×rate, auto)
+    ws.getCell(r,12).value=li.igstP;ws.getCell(r,12).numFmt='0%'; // L = IGST% (editable)
+    ws.getCell(r,13).value={formula:`K${r}*L${r}`};             // M = IGST Amount (auto)
+    ws.getCell(r,14).value={formula:`K${r}+M${r}`};             // N = Total (auto)
   });
   // auto-fit Product Description col5
   const _pd5rp=Math.max(20,...LI.map(l=>String(l.desc||'').length));
@@ -1290,11 +1309,14 @@ function fillRPInvSheet(wb,P){
   const totIGST=LI.reduce((s,l)=>s+l.igstA,0);
   const grand=Math.round(subAmt+totIGST);
   const igstPct=((items[0]?.tax)||5).toFixed(1);
-  // footer (offsets from foRow: 0=subtotal,1=igst,3=roundoff,4=grand,5=amtwords,6=igstwords)
-  ws.getCell(foRow,8).value=subQty;ws.getCell(foRow,11).value=subAmt;
-  ws.getCell(foRow+1,11).value=totIGST;ws.getCell(foRow+1,13).value=totIGST;
-  ws.getCell(foRow+4,8).value=subQty;ws.getCell(foRow+4,9).value='Pcs';ws.getCell(foRow+4,11).value=grand;
-  ws.getCell(foRow+5,4).value=numToWordsIN(grand);
+  // footer — fully formula-based
+  ws.getCell(foRow,8).value={formula:`SUM(H24:H${_rpLastDr})`};   // total qty
+  ws.getCell(foRow,11).value={formula:`SUM(K24:K${_rpLastDr})`};  // subtotal
+  ws.getCell(foRow+1,11).value={formula:`SUM(M24:M${_rpLastDr})`}; // IGST
+  ws.getCell(foRow+1,13).value={formula:`K${foRow+1}`};
+  ws.getCell(foRow+4,8).value={formula:`H${foRow}`};ws.getCell(foRow+4,9).value='Pcs';
+  ws.getCell(foRow+4,11).value={formula:`ROUND(K${foRow}+K${foRow+1},0)`}; // grand total
+  ws.getCell(foRow+5,4).value=numToWordsIN(grand);   // words — static
   ws.getCell(foRow+6,4).value=numToWordsIN(totIGST);
 }
 
@@ -1346,20 +1368,21 @@ function fillDCPLSheet(wb,P){
         dr++;
       }
       // write total on first row and re-merge col10 across all carton rows for this size
-      ws.getCell(firstDr,10).value=qty;
-      if(nCtns>1)ws.mergeCells(firstDr,10,firstDr+nCtns-1,10);
+      const _lcDr=firstDr+nCtns-1;
+      ws.getCell(firstDr,10).value=nCtns===1?{formula:`G${firstDr}`}:{formula:`SUM(G${firstDr}:G${_lcDr})`};
+      if(nCtns>1)ws.mergeCells(firstDr,10,_lcDr,10);
     });
   });
   // auto-fit Product Description col4 (DC PL)
   const _pd4dc=Math.max(20,...items.map(it=>String(it.pdescS||it.prodDesc||it.desc||'').length));
   ws.getColumn(4).width=Math.min(45,_pd4dc*1.15+2);
-  // TOTAL row at 53
-  ws.getCell(53,7).value=totalPcs;
-  ws.getCell(53,9).value=ctnNo;
-  ws.getCell(53,10).value=totalPcs;
+  // TOTAL row at 53 — formula-based
+  ws.getCell(53,7).value={formula:`SUM(G26:G52)`};  // total pcs
+  ws.getCell(53,9).value={formula:`SUM(I26:I52)`};  // total cartons
+  ws.getCell(53,10).value={formula:`G53`};           // mirror total pcs
   // footer dynamic
-  ws.getCell(55,5).value=ctnNo;
-  ws.getCell(56,5).value=totalPcs;
+  ws.getCell(55,5).value={formula:`I53`};            // cartons
+  ws.getCell(56,5).value={formula:`G53`};            // pcs
   // summary colour rows (row 63 = first colour, row 65 = TOTAL)
   let sumR=63;
   const colours=[...new Set(items.map(it=>it.colour))];
@@ -1405,6 +1428,25 @@ function fillRPPLSheet(wb,P){
   // fill per item (typically one item for RP)
   const SIZES=['S','M','L','XL','XXL'];
   const artK={S:'artS',M:'artM',L:'artL',XL:'artXL',XXL:'artXXL'};
+  // pre-build indexes from ALL rows (not FD — FD is filtered to selected PO only, DC rows excluded)
+  // _rpArtMap: "{rpDesc}|{colour}" → RP PRODUCT_CODE (from RP rows)
+  // _dcArtMap: "{rpDesc}|{colour}|{size}" → DC PRODUCT_CODE (from DC rows, per size column)
+  const _rpArtMap={},_dcArtMap={};
+  (typeof ALL!=='undefined'?ALL:FD||[]).forEach(r=>{
+    const _rpd=String(r['RP DESCRPTION']||'').trim();
+    const _col=String(r['Colour']||r._colour||'').trim();
+    const _pc=String(r['PRODUCT_CODE']||'');
+    const _ot=String(r['Order type']||'');
+    if(!_rpd||!_pc||_rpd==='NOT FOUND')return;
+    if(_ot==='RP'){
+      const k=`${_rpd}|${_col}`;
+      if(!_rpArtMap[k])_rpArtMap[k]=_pc;
+    } else if(_ot==='DC'){
+      ['S','M','L','XL','XXL'].forEach(sz=>{
+        if((+r[sz]||0)>0){const k=`${_rpd}|${_col}|${sz}`;if(!_dcArtMap[k])_dcArtMap[k]=_pc;}
+      });
+    }
+  });
   let dr=26,totalCtns=0,totalPcs=0;
   const totS={S:0,M:0,L:0,XL:0,XXL:0};
   items.forEach(it=>{
@@ -1414,14 +1456,13 @@ function fillRPPLSheet(wb,P){
     totalCtns+=fullCtns+(remPacks>0?1:0);
     totalPcs+=packQty*ppk;
     SIZES.forEach(sz=>totS[sz]+=packQty);
-    const masterArt=it.masterCode||it.artS||'';
-    const pdescK2={S:'pdescS',M:'pdescM',L:'pdescL',XL:'pdescXL',XXL:'pdescXXL'};
-    // col3 = Article No. = per-size PRODUCT_CODE
-    const sizeArt=sz=>it[artK[sz]]||masterArt;
-    // col4 = Product Description: per-size full PRODUCT_DESCRIPTION from excel
-    const sizeDesc=sz=>it[pdescK2[sz]]||it.pdescS||it.prodDesc||it.desc||'';
-    // col4 header row = first 2 dash-segments of PRODUCT_DESCRIPTION + "-" + SKU
+    // col3 header = RP PRODUCT_CODE (looked up by RP DESCRPTION + Colour from RP rows)
+    const masterArt=_rpArtMap[`${it.rpDescCol}|${it.colour}`]||it.artS||it.artM||it.artL||it.artXL||it.artXXL||'';
+    // col3 size rows = DC PRODUCT_CODE looked up by RP DESCRPTION + Colour + size column
+    const sizeArt=sz=>_dcArtMap[`${it.rpDescCol}|${it.colour}|${sz}`]||masterArt;
+    // col4 = RP description = part before first ', ' in PRODUCT_DESCRIPTION (e.g. "KRTS-APWN26-GETKRTSFUT6125")
     const hdrDesc=it.pdescS||it.prodDesc||it.desc||'';
+    const sizeDesc=()=>it.rpDescCol||it.rpDesc||it.desc||'';
     // bulk group header row
     // BANGALORE: carton# in header; HARIPAL/JHAJJAR: carton# in S row
     if(loc==='BANGALORE')ws.getCell(dr,1).value=fullCtns;
@@ -1431,14 +1472,16 @@ function fillRPPLSheet(wb,P){
     // S row (bulk)
     if(loc!=='BANGALORE')ws.getCell(dr,1).value=fullCtns;
     ws.getCell(dr,2).value=it.desc;ws.getCell(dr,3).value=sizeArt('S');
-    ws.getCell(dr,4).value=sizeDesc('S');ws.getCell(dr,5).value=it.colour;ws.getCell(dr,6).value='S';
-    ws.getCell(dr,7).value=packsPerCtn;ws.getCell(dr,8).value=pcsPerCtn;
-    ws.getCell(dr,9).value=fullCtns;ws.getCell(dr,10).value=fullCtns*pcsPerCtn;
+    ws.getCell(dr,4).value=sizeDesc();ws.getCell(dr,5).value=it.colour;ws.getCell(dr,6).value='S';
+    ws.getCell(dr,7).value=packsPerCtn;                         // G = packs/ctn (editable)
+    ws.getCell(dr,8).value={formula:`G${dr}*${ppk}`};          // H = pcs/ctn (auto)
+    ws.getCell(dr,9).value=fullCtns;                            // I = no. of cartons (editable)
+    ws.getCell(dr,10).value={formula:`H${dr}*I${dr}`};         // J = total pcs (auto)
     dr++;
     // M,L,XL,XXL bulk rows
     ['M','L','XL','XXL'].forEach(sz=>{
       ws.getCell(dr,2).value=it.desc;ws.getCell(dr,3).value=sizeArt(sz);
-      ws.getCell(dr,4).value=sizeDesc(sz);ws.getCell(dr,5).value=it.colour;ws.getCell(dr,6).value=sz;
+      ws.getCell(dr,4).value=sizeDesc();ws.getCell(dr,5).value=it.colour;ws.getCell(dr,6).value=sz;
       ws.getCell(dr,7).value=packsPerCtn;
       dr++;
     });
@@ -1454,28 +1497,30 @@ function fillRPPLSheet(wb,P){
       // S row (remainder)
       if(loc==='JHAJJAR')ws.getCell(dr,1).value=1;
       ws.getCell(dr,2).value=it.desc;ws.getCell(dr,3).value=sizeArt('S');
-      ws.getCell(dr,4).value=sizeDesc('S');ws.getCell(dr,5).value=it.colour;ws.getCell(dr,6).value='S';
-      ws.getCell(dr,7).value=remPacks;ws.getCell(dr,8).value=remPacks*ppk;
-      ws.getCell(dr,9).value=1;ws.getCell(dr,10).value=remPacks*ppk;
+      ws.getCell(dr,4).value=sizeDesc();ws.getCell(dr,5).value=it.colour;ws.getCell(dr,6).value='S';
+      ws.getCell(dr,7).value=remPacks;                          // G = rem packs (editable)
+      ws.getCell(dr,8).value={formula:`G${dr}*${ppk}`};        // H = pcs (auto)
+      ws.getCell(dr,9).value=1;                                 // I = 1 carton
+      ws.getCell(dr,10).value={formula:`H${dr}*I${dr}`};       // J = total pcs (auto)
       dr++;
       // M,L,XL,XXL remainder rows
       ['M','L','XL','XXL'].forEach(sz=>{
         ws.getCell(dr,2).value=it.desc;ws.getCell(dr,3).value=sizeArt(sz);
-        ws.getCell(dr,4).value=sizeDesc(sz);ws.getCell(dr,5).value=it.colour;ws.getCell(dr,6).value=sz;
+        ws.getCell(dr,4).value=sizeDesc();ws.getCell(dr,5).value=it.colour;ws.getCell(dr,6).value=sz;
         ws.getCell(dr,7).value=remPacks;
         dr++;
       });
     }
   });
-  // TOTAL row
-  ws.getCell(cfg.totRow,9).value=totalCtns;
-  ws.getCell(cfg.totRow,10).value=totalPcs;
+  // TOTAL row — formula-based
+  ws.getCell(cfg.totRow,9).value={formula:`SUM(I26:I${cfg.totRow-1})`};  // total cartons
+  ws.getCell(cfg.totRow,10).value={formula:`SUM(J26:J${cfg.totRow-1})`}; // total pcs
   // auto-fit Product Description col4 (RP PL)
   const _pd4rp=Math.max(20,...items.map(it=>String(it.desc||'').length));
   ws.getColumn(4).width=Math.min(45,_pd4rp*1.15+2);
   // footer counts
-  ws.getCell(cfg.footCtns[0],cfg.footCtns[1]).value=totalCtns;
-  ws.getCell(cfg.footPcs[0],cfg.footPcs[1]).value=totalPcs;
+  ws.getCell(cfg.footCtns[0],cfg.footCtns[1]).value={formula:`I${cfg.totRow}`}; // cartons
+  ws.getCell(cfg.footPcs[0],cfg.footPcs[1]).value={formula:`J${cfg.totRow}`};  // pcs
   // summary (size-wise)
   const colours=[...new Set(items.map(it=>it.colour))];
   let sumR=cfg.sumRow;
