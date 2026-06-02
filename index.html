@@ -1874,6 +1874,22 @@ const CTN_RP_SHEET={S0EU:'HARIPAL-',SAEX:'JHAJJAR ',SZAF:'BANGLORE'};
 const DC_BLOCK_OFFSET={S0EU:0,SAEX:0,SZAF:1};
 const DC_BLOCK_SIZE=23,RP_BLOCK_SIZE=28;
 
+// Remove every row >= firstUnused from the worksheet AND purge stale merge-cell
+// definitions that ExcelJS leaves behind after spliceRows (those ghost merges
+// cause Excel to rebuild the empty blocks when the file is opened).
+function trimWsRows(ws,firstUnused){
+  const lastR=ws.lastRow?ws.lastRow.number:firstUnused+9999;
+  if(lastR<firstUnused)return;
+  ws.spliceRows(firstUnused,lastR-firstUnused+1);
+  // Purge stale merges that reference deleted rows
+  if(ws._merges){
+    Object.keys(ws._merges).forEach(key=>{
+      const m=key.match(/^[A-Z]+(\d+)/);
+      if(m&&parseInt(m[1])>=firstUnused)delete ws._merges[key];
+    });
+  }
+}
+
 function fillDCStickerBlock(ws,bs,ctn,totalCtns,invStr,poNum,styleName,pkgDate){
   // bs = 1-indexed absolute row of "HANDLING UNIT LABEL" for this block
   // Template already has correct formulas for every block — do NOT touch formula cells
@@ -1930,48 +1946,70 @@ async function genCtnSticker(){
   const ws=wb.getWorksheet(sheetName);
   if(!ws){toast('No sticker sheet found for '+dcCode);return;}
 
-  // Scan the template for actual block-start rows (HANDLING UNIT LABEL cells).
-  // This handles any inconsistent block sizes in the template.
-  const blockStarts=[];
+  // Scan template for block-start rows. ExcelJS reports the merged heading cell at the
+  // LAST row of its merge region, so blockStarts[i]-1 = true first row of block i.
+  // For the first block (e.g. A1:H2 merge) the value also appears at row 1, creating a
+  // duplicate entry. Deduplicate by keeping the last of any pair within 2 rows of each other.
+  const allHUL=[];
   ws.eachRow({includeEmpty:false},(row,rn)=>{
     row.eachCell({includeEmpty:false},cell=>{
-      if(cell.value==='HANDLING UNIT LABEL')blockStarts.push(rn);
+      if(cell.value==='HANDLING UNIT LABEL')allHUL.push(rn);
     });
   });
+  const blockStarts=allHUL.filter((rn,i)=>i===allHUL.length-1||allHUL[i+1]-rn>2);
 
-  // ExcelJS reports merged-cell heading "HANDLING UNIT LABEL" at the LAST row of the
-  // merge region (e.g. row 2 for A1:H2) rather than the first row.
-  // Subtract 1 so bs always points at the true first row of each block.
+  let firstUnusedRow=0; // 1-based row where unused blocks start (0 = no trimming needed)
+
   if(isRP){
     const{cartons,totalCtns}=computeRPCartons(items,packsPerCtn);
     if(cartons.length>blockStarts.length){toast(`Template only has ${blockStarts.length} sticker blocks but need ${cartons.length}.`);return;}
     cartons.forEach((ctn,idx)=>{
       fillRPStickerBlock(ws,blockStarts[idx]-1,ctn,totalCtns,invStr,poNum,styleName,pkgDateFmt);
     });
-    // blockStarts[cartons.length] is also shifted +1, so subtract 2 to get true last keep row
-    const blockEnd=cartons.length<blockStarts.length
-      ?blockStarts[cartons.length]-2
-      :ws.rowCount;
-    const toDelete=ws.rowCount-blockEnd;
-    if(toDelete>0)ws.spliceRows(blockEnd+1,toDelete);
+    if(cartons.length<blockStarts.length) firstUnusedRow=blockStarts[cartons.length]-1;
   } else {
     const{cartons,totalCtns}=computeDCCartons(items,ppb);
     if(cartons.length>blockStarts.length){toast(`Template only has ${blockStarts.length} sticker blocks but need ${cartons.length}.`);return;}
     cartons.forEach((ctn,idx)=>{
       fillDCStickerBlock(ws,blockStarts[idx]-1,ctn,totalCtns,invStr,poNum,styleName,pkgDateFmt);
     });
-    const blockEnd=cartons.length<blockStarts.length
-      ?blockStarts[cartons.length]-2
-      :ws.rowCount;
-    const toDelete=ws.rowCount-blockEnd;
-    if(toDelete>0)ws.spliceRows(blockEnd+1,toDelete);
+    if(cartons.length<blockStarts.length) firstUnusedRow=blockStarts[cartons.length]-1;
   }
 
-  // Remove all sheets except the one we filled
+  // Remove all sheets except the one we filled, then write
   wb.worksheets.filter(s=>s.name!==sheetName).forEach(s=>wb.removeWorksheet(s.id));
+  const rawBuf=await wb.xlsx.writeBuffer();
 
-  const outBuf=await wb.xlsx.writeBuffer();
-  const blob=new Blob([outBuf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  // Post-process with SheetJS to reliably remove extra sticker blocks.
+  // ExcelJS's spliceRows leaves stale merge-cell definitions that cause Excel to
+  // reconstruct the deleted rows. SheetJS operates directly on the XML so the
+  // trimmed file is clean.
+  let finalBuf=rawBuf;
+  if(firstUnusedRow>0){
+    try{
+      const sWb=XLSX.read(new Uint8Array(rawBuf),{type:'array',cellStyles:true});
+      const sWs=sWb.Sheets[sheetName];
+      if(sWs){
+        // Remove every cell whose row index (0-based) >= firstUnusedRow-1
+        const delR=firstUnusedRow-1; // 0-based threshold
+        for(const key of Object.keys(sWs)){
+          if(key[0]==='!')continue;
+          if(XLSX.utils.decode_cell(key).r>=delR)delete sWs[key];
+        }
+        // Shrink the declared range
+        const range=XLSX.utils.decode_range(sWs['!ref']||'A1:H1');
+        range.e.r=delR-1;
+        sWs['!ref']=XLSX.utils.encode_range(range);
+        // Remove merge definitions that start in deleted rows
+        if(sWs['!merges']){
+          sWs['!merges']=sWs['!merges'].filter(m=>m.s.r<delR);
+        }
+        finalBuf=XLSX.write(sWb,{type:'array',bookType:'xlsx',cellStyles:true});
+      }
+    }catch(e){console.warn('SheetJS trim failed, using untrimmed output:',e);}
+  }
+
+  const blob=new Blob([finalBuf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);
   a.download=`CTN_Sticker_${invNum}_${dcCode}.xlsx`;a.click();
   toast(`✓ ${isRP?'RP':'DC'} Carton Sticker downloaded`);
