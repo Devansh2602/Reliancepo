@@ -2544,20 +2544,37 @@ async function syncFromDrive(){
   try{
     const files=await _driveList(folderId);
     if(!files.length){setS('No PDF files found in that folder.');return;}
-    setS(`Found ${files.length} PDF${files.length>1?'s':''} — processing…`);
+
+    // Skip files already in DB (matched by fileName) — only download new ones
+    const existing=await _dbGetAll();
+    const existingNames=new Set(existing.map(r=>r.fileName));
+    const newFiles=files.filter(f=>!existingNames.has(f.name));
+    const alreadyDone=files.length-newFiles.length;
+    if(!newFiles.length){
+      setS(`✓ Already up to date — ${alreadyDone} PO${alreadyDone!==1?'s':''} in database.`);
+      if(stStatus){stStatus.textContent='✓ Up to date · '+new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});stStatus.style.color='var(--green)';}
+      return;
+    }
+    setS(`${newFiles.length} new file${newFiles.length>1?'s':''} found — syncing…`);
+
+    // Process in parallel batches of 6
     let ok=0,skip=0;
-    for(const f of files){
-      try{
-        const buf=await _driveGet(f.id);
-        const parsed=await _parsePOPdf(buf);
-        if(parsed.poNum){
-          await _dbPut({poNum:parsed.poNum,hsn:parsed.hsn||'',mrp:parsed.mrp||'',
-            style:parsed.style||'',site:parsed.site||'',
-            fileName:f.name,syncDate:new Date().toLocaleDateString('en-IN')});
-          ok++;
-        }else skip++;
-      }catch(e){skip++;console.warn('PDF parse error',f.name,e);}
-      setS(`Processing… ${ok+skip}/${files.length}`);
+    const BATCH=6;
+    for(let i=0;i<newFiles.length;i+=BATCH){
+      const batch=newFiles.slice(i,i+BATCH);
+      await Promise.all(batch.map(async f=>{
+        try{
+          const buf=await _driveGet(f.id);
+          const parsed=await _parsePOPdf(buf);
+          if(parsed.poNum){
+            await _dbPut({poNum:parsed.poNum,hsn:parsed.hsn||'',mrp:parsed.mrp||'',
+              style:parsed.style||'',site:parsed.site||'',
+              fileName:f.name,syncDate:new Date().toLocaleDateString('en-IN')});
+            ok++;
+          }else skip++;
+        }catch(e){skip++;console.warn('PDF parse error',f.name,e);}
+      }));
+      setS(`Syncing… ${Math.min(i+BATCH,newFiles.length)}/${newFiles.length}`);
     }
     const doneMsg=`✓ Synced — ${ok} PO${ok!==1?'s':''} saved, ${skip} skipped.`;
     setS(doneMsg);
