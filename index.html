@@ -1154,6 +1154,8 @@ async function genExcel(){
   for(let i=0;i<_bin.length;i++)_buf[i]=_bin.charCodeAt(i);
   const wb=new ExcelJS.Workbook();
   await wb.xlsx.load(_buf.buffer);
+  // Fix ExcelJS 4.x sheetView bug — prevents "content problem" warning in Excel
+  wb.worksheets.forEach(s=>{s.views=[{state:'normal'}];});
   const P2={...P,isRP,loc};
   if(isRP){fillRPInvSheet(wb,P2);fillRPPLSheet(wb,P2);}
   else{fillDCInvSheet(wb,P2);fillDCPLSheet(wb,P2);}
@@ -2229,6 +2231,12 @@ async function genCtnSticker(){
   await wb.xlsx.load(extBuf);
   const ws=wb.getWorksheet(sheetName);
   if(!ws){toast('No sticker sheet found for '+dcCode);return;}
+  // Clear template's sheetView state — ExcelJS 4.x writes invalid <sheetView> XML
+  // from frozen-pane / selection states saved in the template, causing Excel's
+  // "We found a problem with some content" error on every open.
+  ws.views=[{state:'normal',showGridLines:false}];
+  // Also clear all other worksheets' views for the same reason
+  wb.worksheets.forEach(s=>{ if(s!==ws) s.views=[{state:'normal'}]; });
 
   // Scan block-start rows (ExcelJS reports merged heading at last row of merge region)
   const allHUL=[];
