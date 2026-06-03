@@ -2244,8 +2244,11 @@ async function genCtnSticker(){
     if(isRP) fillRPStickerBlock(ws,blockStarts[idx]-1,ctn,totalCtns,invStr,poNum,styleName,pkgDateFmt);
     else     fillDCStickerBlock(ws,blockStarts[idx]-1,ctn,totalCtns,invStr,poNum,styleName,pkgDateFmt);
   });
-  const firstUnusedRow=cartons.length<blockStarts.length?blockStarts[cartons.length]-1:0;
-  if(firstUnusedRow>0) trimWsRows(ws,firstUnusedRow);
+  // Set print area to only used blocks — avoids spliceRows which corrupts merge-cell XML
+  const lastUsedRow=blockStarts[cartons.length-1]+(blockSize-1);
+  ws.pageSetup=ws.pageSetup||{};
+  ws.pageSetup.printArea=`A1:H${lastUsedRow}`;
+  ws.pageSetup.fitToPage=true;ws.pageSetup.fitToWidth=1;ws.pageSetup.fitToHeight=0;
 
   // Remove all sheets except the one we filled, then write
   wb.worksheets.filter(s=>s.name!==sheetName).forEach(s=>wb.removeWorksheet(s.id));
