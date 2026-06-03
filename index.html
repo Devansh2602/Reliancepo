@@ -2317,36 +2317,34 @@ async function trimOutputRows(buf, lastRow){
     const wsPath=Object.keys(zip.files).find(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p));
     if(!wsPath)return buf;
     let xml=await zip.file(wsPath).async('string');
-
-    // 1a. Remove self-closing rows: <row r="N" ... />
-    xml=xml.replace(/<row\b[^>]*\/>/g,m=>{
-      const rm=m.match(/\br="(\d+)"/);
-      return rm&&parseInt(rm[1],10)>lastRow?'':m;
-    });
-
-    // 1b. Remove full rows: <row r="N" ...>...</row>
-    xml=xml.replace(/<row\b[^>]*>[\s\S]*?<\/row>/g,m=>{
-      const rm=m.match(/\br="(\d+)"/);
-      return rm&&parseInt(rm[1],10)>lastRow?'':m;
-    });
-
-    // 2. Remove <mergeCell> entries where both row coords exceed lastRow
-    xml=xml.replace(/<mergeCell\s+ref="([A-Z]+)(\d+):([A-Z]+)(\d+)"\s*\/>/g,(m,c1,r1,c2,r2)=>{
-      if(parseInt(r1,10)>lastRow) return ''; // entire merge is past the cut
-      if(parseInt(r2,10)>lastRow) return `<mergeCell ref="${c1}${r1}:${c2}${lastRow}"/>`; // clip
-      return m;
-    });
-
-    // 3. Update <mergeCells count="N">
-    const mergeCount=(xml.match(/<mergeCell\b/g)||[]).length;
-    xml=xml.replace(/(<mergeCells\s+count=")(\d+)(")/,`$1${mergeCount}$3`);
-
-    // 4. Shrink <dimension ref="A1:XN"> end row
-    xml=xml.replace(/(<dimension\s+ref="[A-Z]+\d+:)([A-Z]+)\d+(")/,`$1$2${lastRow}$3`);
-
+    xml=_trimXmlRows(xml, lastRow);
     zip.file(wsPath,xml);
     return zip.generateAsync({type:'arraybuffer'});
   }catch(e){console.warn('trimOutputRows failed:',e);return buf;}
+}
+
+// Shared XML row/merge trimmer — removes rows and merges with row > maxRow
+function _trimXmlRows(wsXml, maxRow){
+  // Remove self-closing rows beyond maxRow
+  wsXml=wsXml.replace(/<row\b[^>]*\/>/g,m=>{
+    const r=m.match(/\br="(\d+)"/);return r&&+r[1]>maxRow?'':m;
+  });
+  // Remove full rows beyond maxRow
+  wsXml=wsXml.replace(/<row\b[^>]*>[\s\S]*?<\/row>/g,m=>{
+    const r=m.match(/\br="(\d+)"/);return r&&+r[1]>maxRow?'':m;
+  });
+  // Remove/clip mergeCell entries
+  wsXml=wsXml.replace(/<mergeCell\s+ref="([A-Z]+)(\d+):([A-Z]+)(\d+)"\s*\/>/g,(m,c1,r1,c2,r2)=>{
+    if(+r1>maxRow)return '';
+    if(+r2>maxRow)return `<mergeCell ref="${c1}${r1}:${c2}${maxRow}"/>`;
+    return m;
+  });
+  // Update mergeCells count
+  const mc=(wsXml.match(/<mergeCell\b/g)||[]).length;
+  wsXml=wsXml.replace(/(<mergeCells\s+count=")(\d+)(")/,`$1${mc}$3`);
+  // Shrink dimension
+  wsXml=wsXml.replace(/(<dimension\s+ref="[A-Z]+\d+:)([A-Z]+)\d+(")/,`$1$2${maxRow}$3`);
+  return wsXml;
 }
 
 async function ensureBlocks(rawBuf,sheetName,neededBlocks,blockSize){
@@ -2363,7 +2361,11 @@ async function ensureBlocks(rawBuf,sheetName,neededBlocks,blockSize){
     if(!sm)return rawBuf;
     const sf=relsMap[sm[1]];if(!sf)return rawBuf;
     let wsXml=await zip.file(`xl/worksheets/${sf}`).async('string');
+    // Extend if template doesn't have enough blocks
     wsXml=extendSheetXml(wsXml,neededBlocks,blockSize,1);
+    // Pre-trim: remove all rows beyond neededBlocks*blockSize so ExcelJS
+    // loads a clean template with exactly the right number of blocks
+    wsXml=_trimXmlRows(wsXml, neededBlocks*blockSize);
     zip.file(`xl/worksheets/${sf}`,wsXml);
     return zip.generateAsync({type:'arraybuffer'});
   }catch(e){console.warn('ensureBlocks failed:',e);return rawBuf;}
