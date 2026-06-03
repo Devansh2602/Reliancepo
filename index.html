@@ -2212,12 +2212,20 @@ async function cleanTemplateZip(rawBuf){
       zip.file('xl/_rels/workbook.xml.rels',wbRels);
     }
 
-    // ── 2. Strip pageSetup r:id + remove printerSettings in every worksheet ──
+    // ── 2. Strip pageSetup r:id + bad sheetView state in every worksheet ──────
     const wsFiles=Object.keys(zip.files).filter(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p));
     for(const wf of wsFiles){
-      // Strip r:id attribute from <pageSetup> so no printer-settings rel needed
       let wsXml=await zip.file(wf).async('string');
+
+      // Strip r:id attribute from <pageSetup> so no printer-settings rel needed
       wsXml=wsXml.replace(/(<pageSetup\b[^>]*?)\s+r:id="[^"]*"/g,'$1');
+
+      // Replace entire <sheetViews>...</sheetViews> with a minimal safe version.
+      // ExcelJS / template sheetViews often contain frozen panes, topLeftCell offsets,
+      // and <selection sqref> pointing inside merged regions — all trigger content errors.
+      wsXml=wsXml.replace(/<sheetViews>[\s\S]*?<\/sheetViews>/,
+        '<sheetViews><sheetView workbookViewId="0"><selection activeCell="A1" sqref="A1"/></sheetView></sheetViews>');
+
       zip.file(wf,wsXml);
 
       // Clean the sheet's own _rels file
@@ -2373,7 +2381,10 @@ async function genCtnSticker(){
     // Strip extra template blocks beyond the ones we filled (JSZip row-level trim,
     // safer than ExcelJS spliceRows which corrupts mergeCells XML)
     const rawOut=await wb.xlsx.writeBuffer();
-    const trimmedOut=await trimOutputRows(rawOut, lastUsedRow);
+    // Re-run cleaner on ExcelJS output — ExcelJS sometimes re-introduces
+    // pageSetup r:id or other bad attributes when writing back
+    const cleanedOut=await cleanTemplateZip(rawOut);
+    const trimmedOut=await trimOutputRows(cleanedOut, lastUsedRow);
     const blob=new Blob([trimmedOut],
       {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     const a=document.createElement('a');a.href=URL.createObjectURL(blob);
