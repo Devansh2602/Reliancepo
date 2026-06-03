@@ -2689,8 +2689,8 @@ function _gdrAutoInit(){
   const fi=document.getElementById('gdr-folder');
   if(fi&&!fi.value)fi.value=folder;
   syncFromDrive();
-  // re-sync every 50 min
-  _gdrAutoInterval=setInterval(()=>syncFromDrive(),50*60*1000);
+  // re-sync every 5 min so newly uploaded Drive files are picked up quickly
+  _gdrAutoInterval=setInterval(()=>syncFromDrive(),5*60*1000);
 }
 
 window.addEventListener('load',()=>{
@@ -2704,23 +2704,30 @@ window.addEventListener('load',()=>{
 });
 
 async function _driveList(folderId){
-  const token=await _saGetToken();
   const q=`'${folderId}' in parents and mimeType='application/pdf' and trashed=false`;
-  const r=await fetch(
-    `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&pageSize=200`,
-    {headers:{Authorization:`Bearer ${token}`}}
-  );
-  if(!r.ok){
-    let detail='';
-    try{const j=await r.json();detail=' — '+(j?.error?.message||JSON.stringify(j));}catch(_){}
-    const base={
-      401:'Token error — check service account key.',
-      403:'Access denied — share the folder with the service account email, and ensure Drive API is enabled in GCP.',
-      404:'Folder not found — check the folder ID and that the service account has access.',
-    }[r.status]||('Drive error '+r.status);
-    throw new Error(base+detail);
-  }
-  return(await r.json()).files||[];
+  const allFiles=[];
+  let pageToken='';
+  do{
+    const token=await _saGetToken();
+    const url=`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}`+
+              `&fields=nextPageToken,files(id,name)&pageSize=200`+
+              (pageToken?`&pageToken=${encodeURIComponent(pageToken)}`:'');
+    const r=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
+    if(!r.ok){
+      let detail='';
+      try{const j=await r.json();detail=' — '+(j?.error?.message||JSON.stringify(j));}catch(_){}
+      const base={
+        401:'Token error — check service account key.',
+        403:'Access denied — share the folder with the service account email, and ensure Drive API is enabled in GCP.',
+        404:'Folder not found — check the folder ID and that the service account has access.',
+      }[r.status]||('Drive error '+r.status);
+      throw new Error(base+detail);
+    }
+    const d=await r.json();
+    (d.files||[]).forEach(f=>allFiles.push(f));
+    pageToken=d.nextPageToken||'';
+  }while(pageToken);
+  return allFiles;
 }
 
 async function _driveGet(fileId){
