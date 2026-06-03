@@ -2411,6 +2411,10 @@ async function _parsePOPdf(arrayBuffer){
 }
 
 /* ── Google Drive — Service Account (no user login) ── */
+const _SA_BUILTIN={
+  client_email:'po-158@neat-scheme-498205-v7.iam.gserviceaccount.com',
+  private_key:'-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCstAblUyx9T7eN\nPgW62Ax+bpL+fiYCFc4znjsu1ytTHj2ncI5rXSJjzzzNehMpc+IqN+tv8TEONYCQ\nS0JsgRNWHJ3HBXtX21FheqFj28YBn+CX2sWPo2/Xoupz4BxDGLKNVI0x91OeOLag\nt+ZjssOD1sRdHTtsvn3gHyy+Aqh20vI8okd8qqkkFBdhHObCd/2xJV+C68GBTAP8\nQWDIbpXJBlmmLC6Lyuoi1kkTWb1d8uk4lixLvkHq4fpApNxWx03nO/Biaa+keqPm\niIUDyDP3aQHnUsm5asxaGVQb+pKkx3vRg+bU5sR3HoAY7NaCrw78F/EeU2gdOgkw\nISvs0SG1AgMBAAECggEAAru9sTL6DQiuNcbRxeWF+xlKa8s41EcekpwSQTlIFwJv\nRN9n7aSVdwFwa6sfMwSBw5vLduPZHCm2HXKHfFqloPMGf0Ajtd4DgXi0pbU0gtGS\nNy0P++hBDKdoMQnOwLQbHVgFfRE2SlaI8229sH3DkOpdBMFB78RrDxlHNsGpg2no\nIh0oNN7DNYZndTYDrkR0KPmwYo4cNYptbssvHXVtRNCq7aU6p+5rHKXfrch/sTAv\nbwJ94KoU/3lH/3yHXu0d+Ol5KR/foDX3VOh1LNwWJl7+JiDNPZ7zLKw+Lsr5L8uB\nGzcTSaDVPHF9fv05wdzZpG7mxky4qBLwMfRd3vB60QKBgQDUIC9798sK96xmWz4r\n1y439b0ZNFBj4nZfAT6pV6QGWQLrGpsTPBE+w+XyZn57T/4EUxzu+NxUZxd5lYjS\nFfZDnXk8BEUiU0es8qcDZhFQGRXprpelqZv+KQSwYTyw/0prxV86+a+9jXMkiI3a\nrOt4hi5bqAEtQFZreg9qyhgsEQKBgQDQbHcojvBB+2LSQG6FihMvMpckAJ4D7kXD\nSHqgFQfV5xz6WHBkY2PFJVAkaU+iI7SxwmJArcdq8L+2OJWwbT6ltRK2sDKO5o5V\nkoGKLQtbdOcsbg2rFX/BJHPB5IlwqpAHikc5OeWtEZidhy86QVhZXiWBqwPw/q2f\nV4b4CUbPZQKBgQDLybP0o+Tzv2dn2kaLNamYZ0Po3+JPY3QW54o8hA73bjIojaHn\nw7BJnUffLWpbq0i8/N/yETETAQuDag5Mzn6NDM84wl1skZdtZpze3gLJ8Z+kpW/Y\n3m4XqW5wyKnW3RuxF6fab5/POgIhWfL132REoJwOwAOJZqLflB8Vl9vLEQKBgQC0\nKs7mlIlDwFcwgNoJPc5Pol/ck1wE8dgEc4btEsDvOxVlo0WkwfXg2dxpXU+lTVBJ\nyUq9tnsICozurANZu1XIULqYib9qoAqyFi88jquep3OeiJPwLGl/QE+AcFoOtqJC\nolnnMhFEhk1y/wToSsxglG2/pWGG1eCoOTVG/F3lsQKBgFFcV2JG2+Ha4/8uXj4X\nOWLmNF6jrXTA8BXU0sj0WI0UyuMMnotoxuWkC82RuBXzVdJTeVRsBjPNz+IxJWWF\n6LEiZexTMdd1VmUEpPhC/lsq4Xfaj7PMrGcPhD2koDykhtPLSXWekOd+v2EbP24V\nu/YfB/BGJtjNhz1gEtX1Ahz6\n-----END PRIVATE KEY-----\n'
+};
 let _gdrToken=null,_gdrTokenExpiry=0,_gdrAutoInterval=null;
 
 function _saveServiceAccount(){
@@ -2438,7 +2442,8 @@ function _clearServiceAccount(){
 async function _saGetToken(){
   // return cached token if still valid (5 min buffer)
   if(_gdrToken&&Date.now()<_gdrTokenExpiry-300000)return _gdrToken;
-  const cfg=JSON.parse(localStorage.getItem('sa_key')||'{}');
+  // use built-in key, or fall back to localStorage if user has pasted a different one
+  const cfg=_SA_BUILTIN.client_email?_SA_BUILTIN:JSON.parse(localStorage.getItem('sa_key')||'{}');
   if(!cfg.client_email||!cfg.private_key)throw new Error('No service account key configured');
   const now=Math.floor(Date.now()/1000);
   const hdr={alg:'RS256',typ:'JWT'};
@@ -2480,11 +2485,10 @@ window.addEventListener('load',()=>{
   const savedFolder=localStorage.getItem('gdr_folder_id');
   const fi=document.getElementById('gdr-folder');
   if(savedFolder&&fi)fi.value=savedFolder;
-  if(localStorage.getItem('sa_key')){
-    document.getElementById('sa-setup-panel').style.display='none';
-    document.getElementById('sa-active-panel').style.display='';
-    _gdrAutoInit();
-  }
+  // built-in SA key — always show active panel and auto-init
+  document.getElementById('sa-setup-panel').style.display='none';
+  document.getElementById('sa-active-panel').style.display='';
+  _gdrAutoInit();
 });
 
 async function _driveList(folderId){
@@ -2527,7 +2531,7 @@ async function syncFromDrive(){
   const folderEl=document.getElementById('gdr-folder');
   if(folderEl)folderEl.value=folderId;
   localStorage.setItem('gdr_folder_id',folderId);
-  if(!localStorage.getItem('sa_key')){toast('Set up service account key first.');return;}
+  if(!_SA_BUILTIN.client_email){toast('No service account configured.');return;}
   const stEl=document.getElementById('gdr-sync-status');
   const stStatus=document.getElementById('gdr-status');
   const setS=msg=>{if(stEl)stEl.textContent=msg;if(stStatus)stStatus.textContent=msg;};
