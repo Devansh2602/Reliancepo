@@ -2243,24 +2243,41 @@ async function cleanTemplateZip(rawBuf){
   }catch(e){console.warn('cleanTemplateZip failed, using raw:',e);return rawBuf;}
 }
 
-// After ExcelJS writes the buffer, strip all rows beyond lastRow in the single
-// remaining worksheet. Does not touch mergeCells — safe for templates with complex merges.
+// After ExcelJS writes the buffer, strip all rows and merge references beyond
+// lastRow in the single remaining worksheet.
 async function trimOutputRows(buf, lastRow){
   if(typeof JSZip==='undefined')return buf;
   try{
     const zip=await JSZip.loadAsync(buf);
-    // There is only one sheet left after wb.removeWorksheet calls
     const wsPath=Object.keys(zip.files).find(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p));
     if(!wsPath)return buf;
     let xml=await zip.file(wsPath).async('string');
 
-    // Remove every <row ...> block whose r="N" has N > lastRow
-    // Rows can be self-closing (<row .../>) or have children (<row ...>...</row>)
-    xml=xml.replace(/<row\b[^>]*\br="(\d+)"[^>]*(?:\/>|>[\s\S]*?<\/row>)/g,(m,r)=>{
-      return parseInt(r,10)>lastRow?'':m;
+    // 1. Remove <row r="N"> elements where N > lastRow
+    //    Handles both self-closing <row .../> and <row ...>...</row>
+    xml=xml.replace(/<row\b[^>]*\br="(\d+)"[^>]*(\/?>(?:[\s\S]*?<\/row>)?)/g,(m,r)=>{
+      if(parseInt(r,10)>lastRow) return '';
+      return m;
     });
 
-    // Shrink the <dimension ref="A1:HN"> to match
+    // 2. Remove <mergeCell> entries whose row numbers are all > lastRow
+    //    ref format is "A12:H14" — drop if both row numbers exceed lastRow
+    xml=xml.replace(/<mergeCell\s+ref="[A-Z]+(\d+):[A-Z]+(\d+)"\s*\/>/g,(m,r1,r2)=>{
+      if(parseInt(r1,10)>lastRow && parseInt(r2,10)>lastRow) return '';
+      // Clip end row if it extends past lastRow into the extra block
+      if(parseInt(r2,10)>lastRow){
+        const col1=m.match(/ref="([A-Z]+)/)[1];
+        const col2=m.match(/:[A-Z]+/)[0].slice(1);
+        return `<mergeCell ref="${col1}${r1}:${col2}${lastRow}"/>`;
+      }
+      return m;
+    });
+
+    // 3. Update <mergeCells count="N"> to reflect removed entries
+    const mergeCount=(xml.match(/<mergeCell\b/g)||[]).length;
+    xml=xml.replace(/(<mergeCells\s+count=")(\d+)(")/,`$1${mergeCount}$3`);
+
+    // 4. Shrink <dimension ref="A1:XN"> end row
     xml=xml.replace(/(<dimension\s+ref="[A-Z]+\d+:)([A-Z]+)\d+(")/,`$1$2${lastRow}$3`);
 
     zip.file(wsPath,xml);
