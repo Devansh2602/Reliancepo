@@ -493,7 +493,7 @@ tfoot td.lft{text-align:left}
           <span id="gdr-status" style="font-size:.75rem;color:var(--tm)">Not connected</span>
         </div>
         <div class="podb-drive-row" style="margin-top:8px">
-          <input class="podb-inp" id="gdr-folder" placeholder="Paste Google Drive Folder ID (e.g. 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs)">
+          <input class="podb-inp" id="gdr-folder" placeholder="Paste Google Drive Folder ID or URL" oninput="if(this.value.trim())localStorage.setItem('gdr_folder_id',this.value.trim())">
           <button class="btn-podb btn-podb-sync" id="btn-gdr-sync" onclick="syncFromDrive()" disabled>⟳ Sync Folder</button>
         </div>
         <div class="podb-status" id="gdr-sync-status"></div>
@@ -2369,11 +2369,24 @@ async function _parsePOPdf(arrayBuffer){
   const hsnM=text.match(/HSN[^0-9]{0,20}(\d{8})/i)||text.match(/\b(\d{8})\b/);
   const hsn=hsnM?hsnM[1]:null;
 
-  // MRP: "MRP" followed by digits, or the pattern ₹/Rs. + number
-  const mrpM=text.match(/\bMRP\b[^0-9]{0,10}([\d,]+\.?\d*)/i)||
-             text.match(/(?:Rs\.?|₹)\s*([\d,]+\.\d{2})/)||
-             text.match(/(\d{3,4}\.\d{2})\s*(?:per|\/)?/);
-  const mrp=mrpM?(mrpM[1].replace(/,/g,'')):null;
+  // MRP: Reliance PO table column order is Quantity | UOM(EA) | MRP | Base Cost
+  // Extract all "EA <number> <number>" pairs — first number after EA = MRP
+  let mrp=null;
+  const eaPairs=[...text.matchAll(/\bEA\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)/g)];
+  if(eaPairs.length){
+    const vals=eaPairs.map(m=>parseFloat(m[1].replace(/,/g,''))).filter(v=>v>0);
+    if(vals.length){
+      // most frequent non-zero value = MRP (same MRP across all rows of the PO)
+      const freq={};vals.forEach(v=>{freq[v]=(freq[v]||0)+1;});
+      mrp=String(Object.entries(freq).sort((a,b)=>b[1]-a[1])[0][0]);
+    }
+  }
+  if(!mrp){
+    // fallback: look for "MRP" label or ₹/Rs. prefix
+    const mrpM=text.match(/\bMRP\b[^0-9]{0,10}([\d,]+\.?\d*)/i)||
+               text.match(/(?:Rs\.?|₹)\s*([\d,]+\.\d{2})/);
+    if(mrpM)mrp=mrpM[1].replace(/,/g,'');
+  }
 
   // Style: Vendor Article No. (alphanumeric, typically 14+ chars)
   const styleM=text.match(/(?:Vendor\s+Article|Article\s+No\.?)[^A-Z0-9]{0,10}([A-Z0-9]{8,})/i);
@@ -2389,7 +2402,29 @@ async function _parsePOPdf(arrayBuffer){
 /* ── Google Drive auth ── */
 const _GDR_CLIENT_ID='251584382774-mhdcndq3l80enqd709cp024d7u3oucob.apps.googleusercontent.com';
 const _GDR_SCOPE='https://www.googleapis.com/auth/drive.readonly';
-let _gdrToken=null, _gdrTokenClient=null;
+let _gdrToken=null, _gdrTokenClient=null, _gdrAutoInterval=null;
+
+function _gdrOnToken(resp,silent){
+  if(resp.error){
+    if(!silent)toast('Drive auth failed: '+resp.error);
+    return;
+  }
+  _gdrToken=resp.access_token;
+  const st=document.getElementById('gdr-status');
+  if(st){st.textContent='✓ Connected';st.style.color='var(--green)';}
+  const sb=document.getElementById('btn-gdr-sync');if(sb)sb.disabled=false;
+  // auto-sync if a folder ID is saved
+  const savedFolder=localStorage.getItem('gdr_folder_id');
+  if(savedFolder){
+    const fi=document.getElementById('gdr-folder');if(fi&&!fi.value)fi.value=savedFolder;
+    syncFromDrive();
+  }
+  // re-auth + re-sync every 45 min (token expires in 60 min)
+  if(_gdrAutoInterval)clearInterval(_gdrAutoInterval);
+  _gdrAutoInterval=setInterval(()=>{
+    if(_gdrTokenClient)_gdrTokenClient.requestAccessToken({prompt:''});
+  },45*60*1000);
+}
 
 function connectDrive(){
   if(typeof google==='undefined'||!google.accounts){
@@ -2398,17 +2433,33 @@ function connectDrive(){
   if(!_gdrTokenClient){
     _gdrTokenClient=google.accounts.oauth2.initTokenClient({
       client_id:_GDR_CLIENT_ID,scope:_GDR_SCOPE,
-      callback:resp=>{
-        if(resp.error){toast('Drive auth failed: '+resp.error);return;}
-        _gdrToken=resp.access_token;
-        const st=document.getElementById('gdr-status');
-        if(st){st.textContent='✓ Connected';st.style.color='var(--green)';}
-        const sb=document.getElementById('btn-gdr-sync');if(sb)sb.disabled=false;
-      }
+      callback:resp=>_gdrOnToken(resp,false)
     });
   }
-  _gdrTokenClient.requestAccessToken();
+  _gdrTokenClient.requestAccessToken({prompt:'select_account'});
 }
+
+// Silent reconnect on page load — no popup if user already granted access before
+function _gdrSilentConnect(){
+  if(typeof google==='undefined'||!google.accounts)return;
+  if(!localStorage.getItem('gdr_folder_id'))return; // nothing to auto-sync
+  if(!_gdrTokenClient){
+    _gdrTokenClient=google.accounts.oauth2.initTokenClient({
+      client_id:_GDR_CLIENT_ID,scope:_GDR_SCOPE,
+      callback:resp=>_gdrOnToken(resp,true)
+    });
+  }
+  _gdrTokenClient.requestAccessToken({prompt:''});
+}
+// attempt silent connect once GIS library is ready
+window.addEventListener('load',()=>{
+  // restore saved folder ID into input
+  const saved=localStorage.getItem('gdr_folder_id');
+  const fi=document.getElementById('gdr-folder');
+  if(saved&&fi)fi.value=saved;
+  // silently reconnect after GIS library loads
+  setTimeout(_gdrSilentConnect,1500);
+});
 
 async function _driveList(folderId){
   const q=`'${folderId}' in parents and mimeType='application/pdf' and trashed=false`;
@@ -2439,14 +2490,15 @@ async function _driveGet(fileId){
 }
 
 async function syncFromDrive(){
-  let raw=(document.getElementById('gdr-folder')||{}).value?.trim();
+  let raw=(document.getElementById('gdr-folder')||{}).value?.trim()||localStorage.getItem('gdr_folder_id')||'';
   if(!raw){toast('Enter a folder ID first.');return;}
   // Accept full Drive URL — extract ID from /folders/ID or ?id=ID
   const urlM=raw.match(/\/folders\/([a-zA-Z0-9_-]{10,})/)||raw.match(/[?&]id=([a-zA-Z0-9_-]{10,})/);
   const folderId=urlM?urlM[1]:raw;
-  // write back cleaned ID so user can see what was used
+  // write back cleaned ID and persist
   const folderEl=document.getElementById('gdr-folder');
-  if(folderEl&&urlM)folderEl.value=folderId;
+  if(folderEl)folderEl.value=folderId;
+  localStorage.setItem('gdr_folder_id',folderId);
   if(!_gdrToken){toast('Connect to Google Drive first.');return;}
   const stEl=document.getElementById('gdr-sync-status');
   const setS=msg=>{if(stEl)stEl.textContent=msg;};
