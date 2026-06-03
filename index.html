@@ -2376,8 +2376,12 @@ async function _parsePOPdf(arrayBuffer){
   const poM=text.match(/Number\s*:\s*(\d{10})/i)||text.match(/\b((?:51|45|41)\d{8})\b/);
   const poNum=poM?poM[1]:null;
 
-  // HSN: labeled "HSN" near an 8-digit number
-  const hsnM=text.match(/HSN[^0-9]{0,20}(\d{8})/i)||text.match(/\b(\d{8})\b/);
+  // HSN: garment HSN codes are 8 digits starting with 6 (chapters 61/62/63 = textiles/garments)
+  // Avoid matching supplier codes (like 10337044) which start with 1
+  const hsnM=text.match(/HSN\s*Code[^0-9]{0,30}(\d{8})/i)||
+             text.match(/\b(6[12356]\d{6})\b/)||   // garment chapters: 61,62,63,65,66
+             text.match(/\b(6[0-9]{7})\b/)||        // any HSN starting with 6
+             text.match(/\b(\d{8})\b/);             // absolute fallback
   const hsn=hsnM?hsnM[1]:null;
 
   // MRP: Reliance PO table column order is Quantity | UOM(EA) | MRP | Base Cost
