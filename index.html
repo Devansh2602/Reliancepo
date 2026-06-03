@@ -2360,9 +2360,15 @@ async function genCtnSticker(){
     const blockStarts=allHUL.filter((rn,i)=>i===allHUL.length-1||allHUL[i+1]-rn>2);
 
     if(!blockStarts.length){toast('Could not find HANDLING UNIT LABEL blocks in template.');return;}
+
+    // If ExcelJS scan found fewer blocks than needed (happens when extendSheetXml added rows
+    // at high row numbers that ExcelJS doesn't enumerate), rebuild positions mathematically.
+    // blockStarts[i] is the HUL heading row; actual block data starts at blockStarts[i]-1.
+    // Consecutive blocks are exactly blockSize rows apart.
     if(blockStarts.length<cartons.length){
-      toast(`Template only has ${blockStarts.length} blocks but need ${cartons.length}. Try again.`);
-      return;
+      const origin=blockStarts[0];
+      blockStarts.length=0;
+      for(let i=0;i<cartons.length;i++) blockStarts.push(origin+i*blockSize);
     }
 
     // Fill blocks
