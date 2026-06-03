@@ -485,23 +485,34 @@ tfoot td.lft{text-align:left}
     </div>
     <div class="podb-body">
 
-      <!-- Option A: Google Drive sync -->
+      <!-- Option A: Google Drive sync via Service Account -->
       <div class="podb-section">
-        <h3>🔗 Sync from Google Drive</h3>
-        <div class="podb-drive-row">
-          <button class="btn-podb btn-podb-connect" id="btn-gdr-connect" onclick="connectDrive()">Connect Google Drive</button>
-          <span id="gdr-status" style="font-size:.75rem;color:var(--tm)">Not connected</span>
+        <h3>🔗 Auto-Sync from Google Drive</h3>
+        <!-- Setup panel (shown only when SA key not configured) -->
+        <div id="sa-setup-panel">
+          <div class="podb-note" style="margin-bottom:8px">
+            <strong>One-time setup — no login needed after this:</strong><br>
+            1. Go to <a href="https://console.cloud.google.com/iam-admin/serviceaccounts" target="_blank">GCP → Service Accounts</a> → Create → Download JSON key<br>
+            2. Share your PO Drive folder with the service account email<br>
+            3. Paste the JSON key below and save
+          </div>
+          <textarea id="sa-key-input" rows="4" style="width:100%;font-size:.7rem;font-family:monospace;background:var(--s2);color:var(--tx);border:1px solid var(--bd);border-radius:6px;padding:6px;resize:vertical" placeholder='Paste service account JSON key here…  {"type":"service_account","project_id":"...","client_email":"...","private_key":"-----BEGIN PRIVATE KEY-----\n..."}' oninput="document.getElementById('btn-sa-save').disabled=!this.value.trim()"></textarea>
+          <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
+            <button class="btn-podb btn-podb-connect" id="btn-sa-save" onclick="_saveServiceAccount()" disabled>💾 Save Key</button>
+            <span style="font-size:.72rem;color:var(--tm)">Stored locally in your browser only — never sent anywhere except Google</span>
+          </div>
         </div>
-        <div class="podb-drive-row" style="margin-top:8px">
-          <input class="podb-inp" id="gdr-folder" placeholder="Paste Google Drive Folder ID or URL" oninput="if(this.value.trim())localStorage.setItem('gdr_folder_id',this.value.trim())">
-          <button class="btn-podb btn-podb-sync" id="btn-gdr-sync" onclick="syncFromDrive()" disabled>⟳ Sync Folder</button>
-        </div>
-        <div class="podb-status" id="gdr-sync-status"></div>
-        <div class="podb-note">
-          <strong>How to get folder ID:</strong> Open the folder in Google Drive → copy the part after /folders/ in the URL.<br>
-          ⚠ Google OAuth requires serving via <strong>http://localhost</strong>. Open a terminal and run:
-          <code style="background:var(--s3);padding:1px 5px;border-radius:3px;font-size:.7rem">python3 -m http.server 8080</code>
-          then open <a href="http://localhost:8080" target="_blank">http://localhost:8080</a>
+        <!-- Active panel (shown when SA key is configured) -->
+        <div id="sa-active-panel" style="display:none">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+            <span id="gdr-status" style="font-size:.78rem;color:var(--tm)">Connecting…</span>
+            <button class="btn-podb" style="font-size:.7rem;padding:3px 8px;background:none;border:1px solid var(--bd);border-radius:4px;cursor:pointer;color:var(--tm)" onclick="_clearServiceAccount()">✕ Remove Key</button>
+          </div>
+          <div class="podb-drive-row">
+            <input class="podb-inp" id="gdr-folder" placeholder="Paste Google Drive Folder ID or URL" oninput="if(this.value.trim())localStorage.setItem('gdr_folder_id',this.value.trim())">
+            <button class="btn-podb btn-podb-sync" id="btn-gdr-sync" onclick="syncFromDrive()">⟳ Sync Now</button>
+          </div>
+          <div class="podb-status" id="gdr-sync-status"></div>
         </div>
       </div>
 
@@ -2399,81 +2410,97 @@ async function _parsePOPdf(arrayBuffer){
   return{poNum,hsn,mrp,style,site};
 }
 
-/* ── Google Drive auth ── */
-const _GDR_CLIENT_ID='251584382774-mhdcndq3l80enqd709cp024d7u3oucob.apps.googleusercontent.com';
-const _GDR_SCOPE='https://www.googleapis.com/auth/drive.readonly';
-let _gdrToken=null, _gdrTokenClient=null, _gdrAutoInterval=null;
+/* ── Google Drive — Service Account (no user login) ── */
+let _gdrToken=null,_gdrTokenExpiry=0,_gdrAutoInterval=null;
 
-function _gdrOnToken(resp,silent){
-  if(resp.error){
-    if(!silent)toast('Drive auth failed: '+resp.error);
-    return;
-  }
-  _gdrToken=resp.access_token;
-  const st=document.getElementById('gdr-status');
-  if(st){st.textContent='✓ Connected';st.style.color='var(--green)';}
-  const sb=document.getElementById('btn-gdr-sync');if(sb)sb.disabled=false;
-  // auto-sync if a folder ID is saved
-  const savedFolder=localStorage.getItem('gdr_folder_id');
-  if(savedFolder){
-    const fi=document.getElementById('gdr-folder');if(fi&&!fi.value)fi.value=savedFolder;
-    syncFromDrive();
-  }
-  // re-auth + re-sync every 45 min (token expires in 60 min)
+function _saveServiceAccount(){
+  const raw=document.getElementById('sa-key-input')?.value.trim();
+  if(!raw)return;
+  try{
+    const key=JSON.parse(raw);
+    if(!key.client_email||!key.private_key)throw new Error('Missing client_email or private_key');
+    localStorage.setItem('sa_key',JSON.stringify(key));
+    document.getElementById('sa-setup-panel').style.display='none';
+    document.getElementById('sa-active-panel').style.display='';
+    _gdrAutoInit();
+    toast('✓ Service account saved — syncing…');
+  }catch(e){toast('Invalid JSON key: '+e.message);}
+}
+
+function _clearServiceAccount(){
+  localStorage.removeItem('sa_key');
+  _gdrToken=null;_gdrTokenExpiry=0;
   if(_gdrAutoInterval)clearInterval(_gdrAutoInterval);
-  _gdrAutoInterval=setInterval(()=>{
-    if(_gdrTokenClient)_gdrTokenClient.requestAccessToken({prompt:''});
-  },45*60*1000);
+  document.getElementById('sa-setup-panel').style.display='';
+  document.getElementById('sa-active-panel').style.display='none';
 }
 
-function connectDrive(){
-  if(typeof google==='undefined'||!google.accounts){
-    toast('Google auth not loaded yet — wait a moment and try again.');return;
-  }
-  if(!_gdrTokenClient){
-    _gdrTokenClient=google.accounts.oauth2.initTokenClient({
-      client_id:_GDR_CLIENT_ID,scope:_GDR_SCOPE,
-      callback:resp=>_gdrOnToken(resp,false)
-    });
-  }
-  _gdrTokenClient.requestAccessToken({prompt:'select_account'});
+async function _saGetToken(){
+  // return cached token if still valid (5 min buffer)
+  if(_gdrToken&&Date.now()<_gdrTokenExpiry-300000)return _gdrToken;
+  const cfg=JSON.parse(localStorage.getItem('sa_key')||'{}');
+  if(!cfg.client_email||!cfg.private_key)throw new Error('No service account key configured');
+  const now=Math.floor(Date.now()/1000);
+  const hdr={alg:'RS256',typ:'JWT'};
+  const pay={iss:cfg.client_email,scope:'https://www.googleapis.com/auth/drive.readonly',
+             aud:'https://oauth2.googleapis.com/token',iat:now,exp:now+3600};
+  const b64u=o=>btoa(JSON.stringify(o)).replace(/=+$/,'').replace(/\+/g,'-').replace(/\//g,'_');
+  const sigInput=b64u(hdr)+'.'+b64u(pay);
+  // strip PEM headers and import key
+  const pem=cfg.private_key.replace(/-----[^-]+-----/g,'').replace(/[\r\n\s]/g,'');
+  const keyBuf=Uint8Array.from(atob(pem),c=>c.charCodeAt(0));
+  const cryptoKey=await crypto.subtle.importKey('pkcs8',keyBuf.buffer,
+    {name:'RSASSA-PKCS1-v1_5',hash:'SHA-256'},false,['sign']);
+  const sigBuf=await crypto.subtle.sign('RSASSA-PKCS1-v1_5',cryptoKey,new TextEncoder().encode(sigInput));
+  const sig=btoa(String.fromCharCode(...new Uint8Array(sigBuf))).replace(/=+$/,'').replace(/\+/g,'-').replace(/\//g,'_');
+  const jwt=sigInput+'.'+sig;
+  const r=await fetch('https://oauth2.googleapis.com/token',{
+    method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:'grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion='+jwt
+  });
+  if(!r.ok){const t=await r.text();throw new Error('SA token error: '+t);}
+  const d=await r.json();
+  _gdrToken=d.access_token;
+  _gdrTokenExpiry=Date.now()+(d.expires_in||3600)*1000;
+  return _gdrToken;
 }
 
-// Silent reconnect on page load — no popup if user already granted access before
-function _gdrSilentConnect(){
-  if(typeof google==='undefined'||!google.accounts)return;
-  if(!localStorage.getItem('gdr_folder_id'))return; // nothing to auto-sync
-  if(!_gdrTokenClient){
-    _gdrTokenClient=google.accounts.oauth2.initTokenClient({
-      client_id:_GDR_CLIENT_ID,scope:_GDR_SCOPE,
-      callback:resp=>_gdrOnToken(resp,true)
-    });
-  }
-  _gdrTokenClient.requestAccessToken({prompt:''});
-}
-// attempt silent connect once GIS library is ready
-window.addEventListener('load',()=>{
-  // restore saved folder ID into input
-  const saved=localStorage.getItem('gdr_folder_id');
+function _gdrAutoInit(){
+  if(_gdrAutoInterval)clearInterval(_gdrAutoInterval);
+  // auto-sync on startup if folder is configured
+  const savedFolder=localStorage.getItem('gdr_folder_id');
   const fi=document.getElementById('gdr-folder');
-  if(saved&&fi)fi.value=saved;
-  // silently reconnect after GIS library loads
-  setTimeout(_gdrSilentConnect,1500);
+  if(savedFolder&&fi&&!fi.value)fi.value=savedFolder;
+  if(savedFolder)syncFromDrive();
+  // re-sync every 50 min
+  _gdrAutoInterval=setInterval(()=>{if(localStorage.getItem('gdr_folder_id'))syncFromDrive();},50*60*1000);
+}
+
+window.addEventListener('load',()=>{
+  const savedFolder=localStorage.getItem('gdr_folder_id');
+  const fi=document.getElementById('gdr-folder');
+  if(savedFolder&&fi)fi.value=savedFolder;
+  if(localStorage.getItem('sa_key')){
+    document.getElementById('sa-setup-panel').style.display='none';
+    document.getElementById('sa-active-panel').style.display='';
+    _gdrAutoInit();
+  }
 });
 
 async function _driveList(folderId){
+  const token=await _saGetToken();
   const q=`'${folderId}' in parents and mimeType='application/pdf' and trashed=false`;
   const r=await fetch(
     `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&pageSize=200`,
-    {headers:{Authorization:`Bearer ${_gdrToken}`}}
+    {headers:{Authorization:`Bearer ${token}`}}
   );
   if(!r.ok){
     let detail='';
     try{const j=await r.json();detail=' — '+(j?.error?.message||JSON.stringify(j));}catch(_){}
     const base={
-      401:'Token expired — click Connect Drive again.',
-      403:'Access denied — make sure Drive API is enabled in Google Cloud Console and this folder is accessible.',
-      404:'Not found — the folder ID may be wrong or Drive API is not enabled in Google Cloud Console.',
+      401:'Token error — check service account key.',
+      403:'Access denied — share the folder with the service account email, and ensure Drive API is enabled in GCP.',
+      404:'Folder not found — check the folder ID and that the service account has access.',
     }[r.status]||('Drive error '+r.status);
     throw new Error(base+detail);
   }
@@ -2481,9 +2508,10 @@ async function _driveList(folderId){
 }
 
 async function _driveGet(fileId){
+  const token=await _saGetToken();
   const r=await fetch(
     `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
-    {headers:{Authorization:`Bearer ${_gdrToken}`}}
+    {headers:{Authorization:`Bearer ${token}`}}
   );
   if(!r.ok)throw new Error('Drive download error '+r.status);
   return r.arrayBuffer();
@@ -2499,10 +2527,11 @@ async function syncFromDrive(){
   const folderEl=document.getElementById('gdr-folder');
   if(folderEl)folderEl.value=folderId;
   localStorage.setItem('gdr_folder_id',folderId);
-  if(!_gdrToken){toast('Connect to Google Drive first.');return;}
+  if(!localStorage.getItem('sa_key')){toast('Set up service account key first.');return;}
   const stEl=document.getElementById('gdr-sync-status');
-  const setS=msg=>{if(stEl)stEl.textContent=msg;};
-  setS('Fetching file list…');
+  const stStatus=document.getElementById('gdr-status');
+  const setS=msg=>{if(stEl)stEl.textContent=msg;if(stStatus)stStatus.textContent=msg;};
+  setS('⟳ Syncing…');
   try{
     const files=await _driveList(folderId);
     if(!files.length){setS('No PDF files found in that folder.');return;}
@@ -2521,9 +2550,15 @@ async function syncFromDrive(){
       }catch(e){skip++;console.warn('PDF parse error',f.name,e);}
       setS(`Processing… ${ok+skip}/${files.length}`);
     }
-    setS(`✓ Done — ${ok} PO${ok!==1?'s':''} saved, ${skip} skipped.`);
+    const doneMsg=`✓ Synced — ${ok} PO${ok!==1?'s':''} saved, ${skip} skipped.`;
+    setS(doneMsg);
+    if(stStatus){stStatus.textContent='✓ Connected · '+new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});stStatus.style.color='var(--green)';}
     await _renderPODBTable();
-  }catch(e){setS('Error: '+e.message);toast('Sync failed: '+e.message);}
+  }catch(e){
+    const em='Sync error: '+e.message;
+    setS(em);
+    if(stStatus){stStatus.textContent='⚠ '+e.message;stStatus.style.color='#e74c3c';}
+  }
 }
 
 /* ── Local PDF upload ── */
