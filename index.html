@@ -2417,12 +2417,14 @@ async function _driveList(folderId){
     {headers:{Authorization:`Bearer ${_gdrToken}`}}
   );
   if(!r.ok){
-    const msg={
-      401:'Token expired — reconnect to Drive.',
-      403:'Access denied — check folder sharing or Drive API is enabled in GCP.',
-      404:'Folder not found — check the folder ID is correct and the folder exists.',
-    }[r.status]||('Drive list error '+r.status);
-    throw new Error(msg);
+    let detail='';
+    try{const j=await r.json();detail=' — '+(j?.error?.message||JSON.stringify(j));}catch(_){}
+    const base={
+      401:'Token expired — click Connect Drive again.',
+      403:'Access denied — make sure Drive API is enabled in Google Cloud Console and this folder is accessible.',
+      404:'Not found — the folder ID may be wrong or Drive API is not enabled in Google Cloud Console.',
+    }[r.status]||('Drive error '+r.status);
+    throw new Error(base+detail);
   }
   return(await r.json()).files||[];
 }
