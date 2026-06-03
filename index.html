@@ -2243,6 +2243,31 @@ async function cleanTemplateZip(rawBuf){
   }catch(e){console.warn('cleanTemplateZip failed, using raw:',e);return rawBuf;}
 }
 
+// After ExcelJS writes the buffer, strip all rows beyond lastRow in the single
+// remaining worksheet. Does not touch mergeCells — safe for templates with complex merges.
+async function trimOutputRows(buf, lastRow){
+  if(typeof JSZip==='undefined')return buf;
+  try{
+    const zip=await JSZip.loadAsync(buf);
+    // There is only one sheet left after wb.removeWorksheet calls
+    const wsPath=Object.keys(zip.files).find(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p));
+    if(!wsPath)return buf;
+    let xml=await zip.file(wsPath).async('string');
+
+    // Remove every <row ...> block whose r="N" has N > lastRow
+    // Rows can be self-closing (<row .../>) or have children (<row ...>...</row>)
+    xml=xml.replace(/<row\b[^>]*\br="(\d+)"[^>]*(?:\/>|>[\s\S]*?<\/row>)/g,(m,r)=>{
+      return parseInt(r,10)>lastRow?'':m;
+    });
+
+    // Shrink the <dimension ref="A1:HN"> to match
+    xml=xml.replace(/(<dimension\s+ref="[A-Z]+\d+:)([A-Z]+)\d+(")/,`$1$2${lastRow}$3`);
+
+    zip.file(wsPath,xml);
+    return zip.generateAsync({type:'arraybuffer'});
+  }catch(e){console.warn('trimOutputRows failed:',e);return buf;}
+}
+
 async function ensureBlocks(rawBuf,sheetName,neededBlocks,blockSize){
   if(typeof JSZip==='undefined')return rawBuf;
   try{
@@ -2328,7 +2353,11 @@ async function genCtnSticker(){
 
     // Remove all sheets except the one we filled, then write
     wb.worksheets.filter(s=>s.name!==sheetName).forEach(s=>wb.removeWorksheet(s.id));
-    const blob=new Blob([await wb.xlsx.writeBuffer()],
+    // Strip extra template blocks beyond the ones we filled (JSZip row-level trim,
+    // safer than ExcelJS spliceRows which corrupts mergeCells XML)
+    const rawOut=await wb.xlsx.writeBuffer();
+    const trimmedOut=await trimOutputRows(rawOut, lastUsedRow);
+    const blob=new Blob([trimmedOut],
       {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     const a=document.createElement('a');a.href=URL.createObjectURL(blob);
     a.download=`CTN_Sticker_${invNum}_${dcCode}.xlsx`;a.click();
