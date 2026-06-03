@@ -2185,6 +2185,64 @@ function extendSheetXml(xmlStr,neededBlocks,blockSize,firstHulRow){
 }
 
 // Auto-extend the sticker template to hold neededBlocks if the current template is too short.
+// Strip dangling references that cause Excel "We found a problem with some content":
+//  • calcChain.xml  — ExcelJS never regenerates it; workbook.xml.rels still points to it
+//  • pageSetup r:id — references printerSettings .bin files that ExcelJS drops
+async function cleanTemplateZip(rawBuf){
+  if(typeof JSZip==='undefined')return rawBuf;
+  try{
+    const zip=await JSZip.loadAsync(rawBuf);
+
+    // ── 1. Remove calcChain.xml ──────────────────────────────────────────────
+    zip.remove('xl/calcChain.xml');
+
+    // Remove from [Content_Types].xml
+    const ctFile=zip.file('[Content_Types].xml');
+    if(ctFile){
+      let ct=await ctFile.async('string');
+      ct=ct.replace(/<Override[^>]+calcChain\.xml[^>]*\/?>/g,'');
+      zip.file('[Content_Types].xml',ct);
+    }
+
+    // Remove from workbook.xml.rels
+    const wbRelsFile=zip.file('xl/_rels/workbook.xml.rels');
+    if(wbRelsFile){
+      let wbRels=await wbRelsFile.async('string');
+      wbRels=wbRels.replace(/<Relationship[^>]+calcChain\.xml[^>]*\/?>/g,'');
+      zip.file('xl/_rels/workbook.xml.rels',wbRels);
+    }
+
+    // ── 2. Strip pageSetup r:id + remove printerSettings in every worksheet ──
+    const wsFiles=Object.keys(zip.files).filter(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p));
+    for(const wf of wsFiles){
+      // Strip r:id attribute from <pageSetup> so no printer-settings rel needed
+      let wsXml=await zip.file(wf).async('string');
+      wsXml=wsXml.replace(/(<pageSetup\b[^>]*?)\s+r:id="[^"]*"/g,'$1');
+      zip.file(wf,wsXml);
+
+      // Clean the sheet's own _rels file
+      const relsPath=wf.replace(/^xl\/worksheets\//,'xl/worksheets/_rels/').replace(/\.xml$/,'.xml.rels');
+      const relsFile=zip.file(relsPath);
+      if(relsFile){
+        let relsXml=await relsFile.async('string');
+        relsXml=relsXml.replace(/<Relationship[^>]+printerSettings[^>]*\/?>/g,'');
+        if(!/<Relationship\b/.test(relsXml)){
+          zip.remove(relsPath); // empty rels file causes its own issues — just remove it
+        } else {
+          zip.file(relsPath,relsXml);
+        }
+      }
+    }
+
+    // ── 3. Remove the printerSettings .bin files themselves ──────────────────
+    Object.keys(zip.files)
+      .filter(p=>p.toLowerCase().includes('printersettings'))
+      .forEach(p=>zip.remove(p));
+
+    return zip.generateAsync({type:'arraybuffer'});
+  }catch(e){console.warn('cleanTemplateZip failed, using raw:',e);return rawBuf;}
+}
+
 async function ensureBlocks(rawBuf,sheetName,neededBlocks,blockSize){
   if(typeof JSZip==='undefined')return rawBuf;
   try{
@@ -2224,7 +2282,9 @@ async function genCtnSticker(){
   const b64=isRP?TMPL_CTN_RP:TMPL_CTN_DC;
   const bin=atob(b64);const raw=new Uint8Array(bin.length);
   for(let i=0;i<bin.length;i++)raw[i]=bin.charCodeAt(i);
-  const extBuf=await ensureBlocks(raw.buffer,sheetName,cartons.length,blockSize);
+  // Remove dangling calcChain + printerSettings refs before ExcelJS touches the ZIP
+  const cleanBuf=await cleanTemplateZip(raw.buffer);
+  const extBuf=await ensureBlocks(cleanBuf,sheetName,cartons.length,blockSize);
 
   // Load into ExcelJS
   const wb=new ExcelJS.Workbook();
