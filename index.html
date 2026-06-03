@@ -2251,6 +2251,63 @@ async function cleanTemplateZip(rawBuf){
   }catch(e){console.warn('cleanTemplateZip failed, using raw:',e);return rawBuf;}
 }
 
+// After ExcelJS writes (and removes other sheets), replace workbook.xml and
+// workbook.xml.rels with a minimal clean version so ExcelJS's sheet-removal
+// side-effects (orphaned definedNames, bad rId references) don't cause Excel errors.
+async function fixWorkbook(buf, sheetName){
+  if(typeof JSZip==='undefined')return buf;
+  try{
+    const zip=await JSZip.loadAsync(buf);
+
+    // Read what ExcelJS wrote for workbook rels to find the actual sheet file path
+    const wbRelsXml=await zip.file('xl/_rels/workbook.xml.rels').async('string');
+    const wbXml=await zip.file('xl/workbook.xml').async('string');
+
+    // Find the rId ExcelJS assigned to our sheet in the output
+    const escaped=sheetName.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    const sheetM=wbXml.match(new RegExp(`name="${escaped}"[^>]+r:id="(rId\\d+)"`));
+    const rId=sheetM?sheetM[1]:'rId1';
+
+    // Find the Target (actual filename) for that rId
+    const relM=wbRelsXml.match(new RegExp(`Id="${rId}"[^>]+Target="([^"]+)"`));
+    const sheetTarget=relM?relM[1]:'worksheets/sheet1.xml';
+
+    const hasSharedStr=!!zip.file('xl/sharedStrings.xml');
+    const hasStyles   =!!zip.file('xl/styles.xml');
+
+    // Minimal workbook.xml — no definedNames, no calcPr oddities, just one sheet
+    zip.file('xl/workbook.xml',
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`+
+      `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"`+
+      ` xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">`+
+      `<bookViews><workbookView xWindow="0" yWindow="0" windowWidth="14400" windowHeight="8400"/></bookViews>`+
+      `<sheets><sheet name="${sheetName}" sheetId="1" r:id="rId1"/></sheets>`+
+      `</workbook>`);
+
+    // Minimal workbook.xml.rels — only the sheet + styles + sharedStrings
+    let nextId=2;
+    let relsBody=
+      `<Relationship Id="rId1"`+
+      ` Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"`+
+      ` Target="${sheetTarget}"/>`;
+    if(hasStyles)
+      relsBody+=`<Relationship Id="rId${nextId++}"`+
+        ` Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles"`+
+        ` Target="styles.xml"/>`;
+    if(hasSharedStr)
+      relsBody+=`<Relationship Id="rId${nextId++}"`+
+        ` Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings"`+
+        ` Target="sharedStrings.xml"/>`;
+
+    zip.file('xl/_rels/workbook.xml.rels',
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`+
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`+
+      relsBody+`</Relationships>`);
+
+    return zip.generateAsync({type:'arraybuffer'});
+  }catch(e){console.warn('fixWorkbook failed:',e);return buf;}
+}
+
 // After ExcelJS writes the buffer, strip all rows and merge references beyond
 // lastRow in the single remaining worksheet.
 async function trimOutputRows(buf, lastRow){
@@ -2387,10 +2444,13 @@ async function genCtnSticker(){
     // Strip extra template blocks beyond the ones we filled (JSZip row-level trim,
     // safer than ExcelJS spliceRows which corrupts mergeCells XML)
     const rawOut=await wb.xlsx.writeBuffer();
-    // Re-run cleaner on ExcelJS output — ExcelJS sometimes re-introduces
-    // pageSetup r:id or other bad attributes when writing back
+    // 1. Strip any r:id / printerSettings / sheetView junk ExcelJS re-introduced
     const cleanedOut=await cleanTemplateZip(rawOut);
-    const trimmedOut=await trimOutputRows(cleanedOut, lastUsedRow);
+    // 2. Replace workbook.xml + workbook.xml.rels with minimal clean version
+    //    (ExcelJS's sheet-removal leaves orphaned definedNames / broken rId refs)
+    const fixedOut=await fixWorkbook(cleanedOut, sheetName);
+    // 3. Remove extra template row blocks beyond the ones we filled
+    const trimmedOut=await trimOutputRows(fixedOut, lastUsedRow);
     const blob=new Blob([trimmedOut],
       {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     const a=document.createElement('a');a.href=URL.createObjectURL(blob);
