@@ -2416,7 +2416,14 @@ async function _driveList(folderId){
     `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)&pageSize=200`,
     {headers:{Authorization:`Bearer ${_gdrToken}`}}
   );
-  if(!r.ok)throw new Error('Drive list error '+r.status);
+  if(!r.ok){
+    const msg={
+      401:'Token expired — reconnect to Drive.',
+      403:'Access denied — check folder sharing or Drive API is enabled in GCP.',
+      404:'Folder not found — check the folder ID is correct and the folder exists.',
+    }[r.status]||('Drive list error '+r.status);
+    throw new Error(msg);
+  }
   return(await r.json()).files||[];
 }
 
@@ -2430,8 +2437,14 @@ async function _driveGet(fileId){
 }
 
 async function syncFromDrive(){
-  const folderId=(document.getElementById('gdr-folder')||{}).value?.trim();
-  if(!folderId){toast('Enter a folder ID first.');return;}
+  let raw=(document.getElementById('gdr-folder')||{}).value?.trim();
+  if(!raw){toast('Enter a folder ID first.');return;}
+  // Accept full Drive URL — extract ID from /folders/ID or ?id=ID
+  const urlM=raw.match(/\/folders\/([a-zA-Z0-9_-]{10,})/)||raw.match(/[?&]id=([a-zA-Z0-9_-]{10,})/);
+  const folderId=urlM?urlM[1]:raw;
+  // write back cleaned ID so user can see what was used
+  const folderEl=document.getElementById('gdr-folder');
+  if(folderEl&&urlM)folderEl.value=folderId;
   if(!_gdrToken){toast('Connect to Google Drive first.');return;}
   const stEl=document.getElementById('gdr-sync-status');
   const setS=msg=>{if(stEl)stEl.textContent=msg;};
