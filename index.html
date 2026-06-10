@@ -1375,6 +1375,12 @@ function fillDCPLSheet(wb,P){
   ws.getCell(53,7).value={formula:`SUM(G26:G52)`};  // total pcs
   ws.getCell(53,9).value={formula:`SUM(I26:I52)`};  // total cartons
   ws.getCell(53,10).value={formula:`G53`};           // mirror total pcs
+  // Apply borders to all cells in the total row so they match the data rows above
+  const _tb={style:'thin'};
+  for(let c=1;c<=10;c++){
+    const _tc=ws.getCell(53,c);
+    _tc.border={top:_tb,bottom:_tb,left:_tb,right:_tb};
+  }
   // footer dynamic
   ws.getCell(55,5).value={formula:`I53`};            // cartons
   ws.getCell(56,5).value={formula:`G53`};            // pcs
@@ -2544,7 +2550,11 @@ async function _buildStickerBuffer(params){
     if(isRP)fillRPStickerBlock(ws,blockStarts[idx]-1,ctn,totalCtns,invStr,poNum,styleName,pkgDateFmt);
     else    fillDCStickerBlock(ws,blockStarts[idx]-1,ctn,totalCtns,invStr,poNum,styleName,pkgDateFmt);
   });
-  const lastUsedRow=blockStarts[cartons.length-1]+(blockSize-1);
+  // Use the actual last-written row offset (RP: c(25,..) = offset 25; DC: c(20,..) = offset 20)
+  // rather than blockSize-1, to ensure the post-trim removes any orphaned HUL rows from
+  // the next template block that blockSize-1 would otherwise keep.
+  const lastContentOff=isRP?25:20;
+  const lastUsedRow=blockStarts[cartons.length-1]+lastContentOff;
   ws.pageSetup=ws.pageSetup||{};ws.pageSetup.printArea=`A1:H${lastUsedRow}`;
   wb.worksheets.filter(s=>s.name!==sheetName).forEach(s=>wb.removeWorksheet(s.id));
   const rawOut=await wb.xlsx.writeBuffer();
@@ -2617,7 +2627,8 @@ async function genCtnSticker(){
       else     fillDCStickerBlock(ws,blockStarts[idx]-1,ctn,totalCtns,invStr,poNum,styleName,pkgDateFmt);
     });
     // Set print area to only used blocks — avoids spliceRows which corrupts merge-cell XML
-    const lastUsedRow=blockStarts[cartons.length-1]+(blockSize-1);
+    const lastContentOff=isRP?25:20;
+    const lastUsedRow=blockStarts[cartons.length-1]+lastContentOff;
     ws.pageSetup=ws.pageSetup||{};
     ws.pageSetup.printArea=`A1:H${lastUsedRow}`;
     ws.pageSetup.fitToPage=true;ws.pageSetup.fitToWidth=1;ws.pageSetup.fitToHeight=0;
