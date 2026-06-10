@@ -1214,14 +1214,16 @@ function fillDCInvSheet(wb,P){
       const rate=it.cu,amt=qty*rate;
       const igstA=amt*igstRate,totA=amt+igstA;
       subQty+=qty;subAmt+=amt;
-      LI.push({sr,hsn:+it.hsn||it.hsn,art:String(art),style:it.desc,desc:it.prodDesc||it.desc,colour:it.colour,sz,qty,rate,amt,igstP:igstRate,igstA,totA});
+      LI.push({sr,hsn:String(it.hsn||''),art:String(art),style:it.desc,desc:it.prodDesc||it.desc,colour:it.colour,sz,qty,rate,amt,igstP:igstRate,igstA,totA});
       sr++;
     });
   });
   const _dcLastDr=25+LI.length-1;
   LI.forEach((li,idx)=>{
     const r=25+idx;
-    ws.getCell(r,1).value=li.sr;ws.getCell(r,2).value=li.hsn;ws.getCell(r,3).value=li.art;
+    ws.getCell(r,1).value=li.sr;
+    const _hsnDC=ws.getCell(r,2);_hsnDC.value=String(li.hsn||'');_hsnDC.numFmt='@'; // HSN = text
+    ws.getCell(r,3).value=li.art;
     ws.getCell(r,4).value=li.style;ws.getCell(r,5).value=li.desc;ws.getCell(r,6).value=li.colour;
     ws.getCell(r,7).value=li.sz;
     const _hCell=ws.getCell(r,8);_hCell.value=Math.round(li.qty);_hCell.numFmt='#,##0'; // H = QTY integer
@@ -1284,14 +1286,16 @@ function fillRPInvSheet(wb,P){
     const rate=it.cu,ratePerPc=rate/ppk,amt=qty*rate;  // cu is per pack; rate per piece = cu/5
     const igstA=amt*igstRate,totA=amt+igstA;
     subQty+=qty;subAmt+=amt;
-    LI.push({sr,hsn:+it.hsn||it.hsn,art,style:styleNo,desc:prodDesc,colour:it.colour,
+    LI.push({sr,hsn:String(it.hsn||''),art,style:styleNo,desc:prodDesc,colour:it.colour,
              qty,mrp:it.mrp||0,rate:ratePerPc,amt,igstP:igstRate,igstA,totA});
     sr++;
   });
   const _rpLastDr=24+LI.length-1;
   LI.forEach((li,idx)=>{
     const r=24+idx;
-    ws.getCell(r,1).value=li.sr;ws.getCell(r,2).value=li.hsn;ws.getCell(r,3).value=li.art;
+    ws.getCell(r,1).value=li.sr;
+    const _hsnRP=ws.getCell(r,2);_hsnRP.value=String(li.hsn||'');_hsnRP.numFmt='@'; // HSN = text
+    ws.getCell(r,3).value=li.art;
     ws.getCell(r,4).value=li.style;ws.getCell(r,5).value=li.desc;ws.getCell(r,6).value=li.colour;
     ws.getCell(r,7).value='RP';
     const _rhCell=ws.getCell(r,8);_rhCell.value=Math.round(li.qty);_rhCell.numFmt='#,##0'; // H = QTY integer
@@ -2378,6 +2382,18 @@ async function ensureBlocks(rawBuf,sheetName,neededBlocks,blockSize){
     // Pre-trim: remove all rows beyond neededBlocks*blockSize so ExcelJS
     // loads a clean template with exactly the right number of blocks
     wsXml=_trimXmlRows(wsXml, neededBlocks*blockSize);
+    // Clear stale info-field cells (col E, offsets 3-6 and 13 per block) from XML
+    // before ExcelJS loads. Template may store these as inline strings which ExcelJS
+    // cannot overwrite — stripping here ensures the new values write cleanly.
+    for(let b=0;b<neededBlocks;b++){
+      for(const off of [3,4,5,6,13]){
+        const row=b*blockSize+off;
+        wsXml=wsXml.replace(
+          new RegExp(`<c\\b([^>]*)\\br="E${row}"([^>]*)>[\\s\\S]*?<\\/c>`,'g'),
+          (m)=>{const s=(m.match(/\bs="([^"]*)"/)||[])[1];return s?`<c r="E${row}" s="${s}"></c>`:`<c r="E${row}"></c>`;}
+        );
+      }
+    }
     zip.file(`xl/worksheets/${sf}`,wsXml);
     return zip.generateAsync({type:'arraybuffer'});
   }catch(e){console.warn('ensureBlocks failed:',e);return rawBuf;}
