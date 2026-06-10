@@ -2377,17 +2377,23 @@ async function ensureBlocks(rawBuf,sheetName,neededBlocks,blockSize){
     if(!sm)return rawBuf;
     const sf=relsMap[sm[1]];if(!sf)return rawBuf;
     let wsXml=await zip.file(`xl/worksheets/${sf}`).async('string');
+    // BANGALORE DC sheet has a blank row 1 — its blocks start at row 2 (offset 1).
+    // All other sheets start at row 1 (offset 0).
+    const firstHulRow=sheetName==='BANGALORE'?2:1;
+    const blockStartOff=firstHulRow-1; // 1 for BANGALORE, 0 for all others
     // Extend if template doesn't have enough blocks
-    wsXml=extendSheetXml(wsXml,neededBlocks,blockSize,1);
-    // Pre-trim: remove all rows beyond neededBlocks*blockSize so ExcelJS
-    // loads a clean template with exactly the right number of blocks
-    wsXml=_trimXmlRows(wsXml, neededBlocks*blockSize);
+    wsXml=extendSheetXml(wsXml,neededBlocks,blockSize,firstHulRow);
+    // Pre-trim: remove all rows beyond the last used row so ExcelJS loads a clean
+    // template with exactly the right number of blocks.
+    // For BANGALORE the last block ends at neededBlocks*blockSize+blockStartOff
+    wsXml=_trimXmlRows(wsXml, neededBlocks*blockSize+blockStartOff);
     // Clear stale info-field cells (col E, offsets 3-6 and 13 per block) from XML
     // before ExcelJS loads. Template may store these as inline strings which ExcelJS
     // cannot overwrite — stripping here ensures the new values write cleanly.
+    // Row = blockStartOff + b*blockSize + off  (accounts for BANGALORE's row-1 blank)
     for(let b=0;b<neededBlocks;b++){
       for(const off of [3,4,5,6,13]){
-        const row=b*blockSize+off;
+        const row=blockStartOff+b*blockSize+off;
         wsXml=wsXml.replace(
           new RegExp(`<c\\b([^>]*)\\br="E${row}"([^>]*)>[\\s\\S]*?<\\/c>`,'g'),
           (m)=>{const s=(m.match(/\bs="([^"]*)"/)||[])[1];return s?`<c r="E${row}" s="${s}"></c>`:`<c r="E${row}"></c>`;}
