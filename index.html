@@ -1132,15 +1132,13 @@ async function genExcel(){
   if(isRP){fillRPInvSheet(wb,P2);fillRPPLSheet(wb,P2);}
   else{fillDCInvSheet(wb,P2);fillDCPLSheet(wb,P2);}
 
-  let buf=await wb.xlsx.writeBuffer();
-
-  // Build carton sticker and merge as "Carton Sticker" sheet in the same file
+  // Add carton sticker as 3rd worksheet — BEFORE writeBuffer so styles stay in same workbook
   try{
     const stickerParams={invNum,dcCode,fmtField,ppb,pkgDateFmt,poNum,isRP,ppk,packsPerCtn,items};
-    const stickerBuf=await _buildStickerBuffer(stickerParams);
-    if(stickerBuf) buf=await _addStickerSheet(buf,stickerBuf);
-  }catch(se){console.warn('Sticker merge failed:',se);}
+    await _addStickerToWb(wb,stickerParams);
+  }catch(se){console.warn('Sticker sheet failed:',se);}
 
+  const buf=await wb.xlsx.writeBuffer();
   const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
   const a=document.createElement('a');
   a.href=URL.createObjectURL(blob);
@@ -1993,18 +1991,29 @@ function computeDCCartons(items,ppb){
 }
 
 function computeRPCartons(items,packsPerCtn){
-  const artK={S:'artS',M:'artM',L:'artL',XL:'artXL',XXL:'artXXL'};
   const SIZES=['S','M','L','XL','XXL'];
   const cartons=[];let ctnNo=0;
+  // Build same article-number maps as fillRPPLSheet so sticker matches packing list
+  const _rpArtMap={},_dcArtMap={};
+  (typeof ALL!=='undefined'?ALL:FD||[]).forEach(r=>{
+    const _rpd=String(r['RP DESCRPTION']||'').trim();
+    const _col=String(r['Colour']||r._colour||'').trim();
+    const _pc=String(r['PRODUCT_CODE']||'');
+    const _ot=String(r['Order type']||'');
+    if(!_rpd||!_pc||_rpd==='NOT FOUND')return;
+    if(_ot==='RP'){const k=`${_rpd}|${_col}`;if(!_rpArtMap[k])_rpArtMap[k]=_pc;}
+    else if(_ot==='DC'){SIZES.forEach(sz=>{if((+r[sz]||0)>0){const k=`${_rpd}|${_col}|${sz}`;if(!_dcArtMap[k])_dcArtMap[k]=_pc;}});}
+  });
   items.forEach(it=>{
     const packQty=it.S||it.M||it.L||it.XL||it.XXL||0;if(!packQty)return;
     const fullCtns=Math.floor(packQty/packsPerCtn);
     const remPacks=packQty%packsPerCtn;
-    // Use article/product code (same as packing list col3), not EAN barcode
-    const mc=it.masterCode||it.artS||it.artM||it.artL||it.artXL||it.artXXL||'';
-    const packEan=mc;
+    // Same lookup as fillRPPLSheet col3
+    const masterArt=_rpArtMap[`${it.rpDescCol}|${it.colour}`]||it.artS||it.artM||it.artL||it.artXL||it.artXXL||'';
+    const sizeArt=sz=>_dcArtMap[`${it.rpDescCol}|${it.colour}|${sz}`]||masterArt;
+    const packEan=masterArt;
     const perSizeEans={};
-    SIZES.forEach(sz=>{perSizeEans[sz]=it[artK[sz]]||mc;});
+    SIZES.forEach(sz=>{perSizeEans[sz]=sizeArt(sz);});
     function makeCtn(packs){
       const sizeQtys={};
       SIZES.forEach(sz=>{sizeQtys[sz]=Math.round((it[sz]||packQty)/packQty*packs);});
@@ -2351,6 +2360,85 @@ async function ensureBlocks(rawBuf,sheetName,neededBlocks,blockSize){
   }catch(e){console.warn('ensureBlocks failed:',e);return rawBuf;}
 }
 
+// Copy an ExcelJS worksheet into another workbook (preserves styles, borders, merges)
+function _copyWorksheet(srcWs,destWb,name,lastRow){
+  const destWs=destWb.addWorksheet(name);
+  // column widths (A–H = 8 cols for sticker)
+  for(let ci=1;ci<=8;ci++){
+    const srcCol=srcWs.getColumn(ci);
+    if(srcCol&&srcCol.width)destWs.getColumn(ci).width=srcCol.width;
+  }
+  // rows up to lastRow (skip empties beyond fill area)
+  const maxRow=lastRow||srcWs.rowCount;
+  for(let rn=1;rn<=maxRow;rn++){
+    const srcRow=srcWs.getRow(rn);
+    const destRow=destWs.getRow(rn);
+    if(srcRow.height)destRow.height=srcRow.height;
+    for(let cn=1;cn<=8;cn++){
+      const srcCell=srcRow.getCell(cn);
+      const destCell=destRow.getCell(cn);
+      if(srcCell.value!=null)destCell.value=srcCell.value;
+      try{
+        const s=srcCell.style;
+        if(s&&Object.keys(s).length)destCell.style=JSON.parse(JSON.stringify(s));
+      }catch(_){}
+    }
+  }
+  // merged cells
+  try{
+    const merges=(srcWs.model&&srcWs.model.merges)||[];
+    merges.forEach(m=>{
+      // only copy merges within our row range
+      const rowM=m.match(/[A-Z]+(\d+):[A-Z]+(\d+)/);
+      if(rowM&&+rowM[1]<=maxRow){
+        try{destWs.mergeCells(m);}catch(_){}
+      }
+    });
+  }catch(_){}
+  return destWs;
+}
+
+// Load sticker template, fill blocks, and add as "Carton Sticker" sheet to invWb
+// Using same ExcelJS workbook ensures styles/borders are transferred correctly
+async function _addStickerToWb(invWb,params){
+  const{invNum,dcCode,ppb,pkgDateFmt,poNum,isRP,ppk,packsPerCtn,items}=params;
+  if(!items||!items.length)return;
+  const sheetName=isRP?CTN_RP_SHEET[dcCode]:CTN_DC_SHEET[dcCode];
+  const blockSize=isRP?RP_BLOCK_SIZE:DC_BLOCK_SIZE;
+  const styleName=items[0]?.desc||'';
+  const invStr=`GS/${invNum}`;
+  const{cartons,totalCtns}=isRP?computeRPCartons(items,packsPerCtn):computeDCCartons(items,ppb);
+  if(!cartons.length)return;
+  const b64=isRP?TMPL_CTN_RP:TMPL_CTN_DC;
+  const bin=atob(b64);const raw=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++)raw[i]=bin.charCodeAt(i);
+  const cleanBuf=await cleanTemplateZip(raw.buffer);
+  const extBuf=await ensureBlocks(cleanBuf,sheetName,cartons.length,blockSize);
+  const stickerWb=new ExcelJS.Workbook();
+  await stickerWb.xlsx.load(extBuf);
+  const stickerWs=stickerWb.getWorksheet(sheetName);
+  if(!stickerWs)return;
+  stickerWs.views=[{state:'normal',showGridLines:false}];
+  // Find block starts
+  const allHUL=[];
+  stickerWs.eachRow({includeEmpty:false},(row,rn)=>{
+    row.eachCell({includeEmpty:false},cell=>{if(cell.value==='HANDLING UNIT LABEL')allHUL.push(rn);});
+  });
+  let blockStarts=allHUL.filter((rn,i)=>i===allHUL.length-1||allHUL[i+1]-rn>2);
+  if(!blockStarts.length)return;
+  if(blockStarts.length<cartons.length){
+    const origin=blockStarts[0];blockStarts=[];
+    for(let i=0;i<cartons.length;i++)blockStarts.push(origin+i*blockSize);
+  }
+  cartons.forEach((ctn,idx)=>{
+    if(isRP)fillRPStickerBlock(stickerWs,blockStarts[idx]-1,ctn,totalCtns,invStr,poNum,styleName,pkgDateFmt);
+    else    fillDCStickerBlock(stickerWs,blockStarts[idx]-1,ctn,totalCtns,invStr,poNum,styleName,pkgDateFmt);
+  });
+  const lastUsedRow=blockStarts[cartons.length-1]+(blockSize-1);
+  // Copy into invoice workbook — styles travel with the cells
+  _copyWorksheet(stickerWs,invWb,'Carton Sticker',lastUsedRow);
+}
+
 // Build sticker buffer (same pipeline as genCtnSticker but returns buffer, no download)
 async function _buildStickerBuffer(params){
   const{invNum,dcCode,ppb,pkgDateFmt,poNum,isRP,ppk,packsPerCtn,items}=params;
@@ -2393,74 +2481,6 @@ async function _buildStickerBuffer(params){
   const cleanedOut=await cleanTemplateZip(rawOut);
   const fixedOut=await fixWorkbook(cleanedOut,sheetName);
   return await trimOutputRows(fixedOut,lastUsedRow);
-}
-
-// Merge a single-sheet sticker buffer as a new worksheet into the invoice workbook buffer.
-// Converts sticker shared-strings to inline strings so indices don't collide.
-async function _addStickerSheet(invBuf,stickerBuf){
-  if(typeof JSZip==='undefined')return invBuf;
-  try{
-    const invZip=await JSZip.loadAsync(invBuf);
-    const stkZip=await JSZip.loadAsync(stickerBuf);
-
-    // --- get sticker worksheet XML ---
-    const stkWsPath=Object.keys(stkZip.files).find(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p));
-    if(!stkWsPath)return invBuf;
-    let stkXml=await stkZip.file(stkWsPath).async('string');
-
-    // --- convert shared-string references → inline strings ---
-    const ssFile=stkZip.file('xl/sharedStrings.xml');
-    if(ssFile){
-      const ssXml=await ssFile.async('string');
-      const strings=[];
-      for(const m of ssXml.matchAll(/<si>([\s\S]*?)<\/si>/g)){
-        // collect all <t> values within this <si> (handles <r><t>...</t></r> runs too)
-        const texts=[...m[1].matchAll(/<t(?:\s[^>]*)?>([^<]*)<\/t>/g)].map(t=>t[1]);
-        strings.push(texts.join(''));
-      }
-      stkXml=stkXml.replace(/<c\b([^>]*)><v>(\d+)<\/v><\/c>/g,(m,attrs,idx)=>{
-        if(!attrs.includes('t="s"'))return m;
-        const str=(strings[+idx]||'')
-          .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-        const cleanAttrs=attrs.replace(/\s*t="s"/,'').trim();
-        return `<c ${cleanAttrs} t="inlineStr"><is><t>${str}</t></is></c>`;
-      });
-    }
-
-    // --- find next free sheet slot in invoice workbook ---
-    const invWbXml=await invZip.file('xl/workbook.xml').async('string');
-    const usedIds=[...invWbXml.matchAll(/sheetId="(\d+)"/g)].map(m=>+m[1]);
-    const newSheetId=Math.max(0,...usedIds)+1;
-    const newFile=`sheet${newSheetId}.xml`;
-    const newRid=`rId${newSheetId+20}`; // well above existing rIds
-
-    // --- add sticker sheet file ---
-    invZip.file(`xl/worksheets/${newFile}`,stkXml);
-
-    // --- update workbook.xml ---
-    const updatedWbXml=invWbXml.replace('</sheets>',
-      `<sheet name="Carton Sticker" sheetId="${newSheetId}" r:id="${newRid}"/></sheets>`);
-    invZip.file('xl/workbook.xml',updatedWbXml);
-
-    // --- update workbook.xml.rels ---
-    let wbRels=await invZip.file('xl/_rels/workbook.xml.rels').async('string');
-    wbRels=wbRels.replace('</Relationships>',
-      `<Relationship Id="${newRid}" `+
-      `Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" `+
-      `Target="worksheets/${newFile}"/></Relationships>`);
-    invZip.file('xl/_rels/workbook.xml.rels',wbRels);
-
-    // --- update [Content_Types].xml ---
-    let ct=await invZip.file('[Content_Types].xml').async('string');
-    if(!ct.includes(newFile)){
-      ct=ct.replace('</Types>',
-        `<Override PartName="/xl/worksheets/${newFile}" `+
-        `ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`);
-      invZip.file('[Content_Types].xml',ct);
-    }
-
-    return invZip.generateAsync({type:'arraybuffer'});
-  }catch(e){console.warn('_addStickerSheet failed:',e);return invBuf;}
 }
 
 async function genCtnSticker(){
