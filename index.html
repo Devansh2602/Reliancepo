@@ -1223,12 +1223,14 @@ function fillDCInvSheet(wb,P){
     const r=25+idx;
     ws.getCell(r,1).value=li.sr;ws.getCell(r,2).value=li.hsn;ws.getCell(r,3).value=li.art;
     ws.getCell(r,4).value=li.style;ws.getCell(r,5).value=li.desc;ws.getCell(r,6).value=li.colour;
-    ws.getCell(r,7).value=li.sz;ws.getCell(r,8).value=li.qty;ws.getCell(r,9).value='PCS';
-    const _jCell=ws.getCell(r,10);_jCell.value=Math.round(li.rate*100)/100;_jCell.numFmt='#,##0.##'; // J = Rate
-    const _kCell=ws.getCell(r,11);_kCell.value={formula:`ROUND(H${r}*J${r},2)`};_kCell.numFmt='#,##0.##'; // K = Amount
+    ws.getCell(r,7).value=li.sz;
+    const _hCell=ws.getCell(r,8);_hCell.value=Math.round(li.qty);_hCell.numFmt='#,##0'; // H = QTY integer
+    ws.getCell(r,9).value='PCS';
+    const _jCell=ws.getCell(r,10);_jCell.value=Math.round(li.rate*100)/100;_jCell.numFmt='#,##0.00'; // J = Rate
+    const _kCell=ws.getCell(r,11);_kCell.value={formula:`ROUND(H${r}*J${r},2)`};_kCell.numFmt='#,##0.00'; // K = Amount
     ws.getCell(r,12).value=Math.round(li.igstP*100)+'%';        // L = "5%" as text
-    ws.getCell(r,13).value={formula:`ROUND(K${r}*${li.igstP},2)`};ws.getCell(r,13).numFmt='#,##0.##'; // M = IGST Amount
-    ws.getCell(r,14).value={formula:`ROUND(K${r}+M${r},2)`};ws.getCell(r,14).numFmt='#,##0.##'; // N = Total
+    ws.getCell(r,13).value={formula:`ROUND(K${r}*${li.igstP},2)`};ws.getCell(r,13).numFmt='#,##0.00'; // M = IGST Amount
+    ws.getCell(r,14).value={formula:`ROUND(K${r}+M${r},2)`};ws.getCell(r,14).numFmt='#,##0.00'; // N = Total
   });
   // auto-fit Product Description col5
   const _pd5=Math.max(20,...LI.map(l=>String(l.desc||'').length));
@@ -1239,13 +1241,13 @@ function fillDCInvSheet(wb,P){
   const grand=Math.round(subAmt+totIGST);
   const igstPct=((items[0]?.tax)||5).toFixed(1);
   // footer — fully formula-based (change qty/rate → everything recalculates)
-  ws.getCell(40,8).value={formula:`SUM(H25:H${_dcLastDr})`};   // total qty
-  const _dcfK=ws.getCell(40,11);_dcfK.value={formula:`ROUND(SUM(K25:K${_dcLastDr}),2)`};_dcfK.numFmt='#,##0.##';
+  const _h40=ws.getCell(40,8);_h40.value={formula:`SUM(H25:H${_dcLastDr})`};_h40.numFmt='#,##0'; // total qty integer
+  const _dcfK=ws.getCell(40,11);_dcfK.value={formula:`ROUND(SUM(K25:K${_dcLastDr}),2)`};_dcfK.numFmt='#,##0.00';
   ws.getCell(41,6).value='IGST@'+igstPct+'%';
-  const _dcfM=ws.getCell(41,11);_dcfM.value={formula:`ROUND(SUM(M25:M${_dcLastDr}),2)`};_dcfM.numFmt='#,##0.##';
-  const _dcfM2=ws.getCell(41,13);_dcfM2.value={formula:`ROUND(K41,2)`};_dcfM2.numFmt='#,##0.##';
+  const _dcfM=ws.getCell(41,11);_dcfM.value={formula:`ROUND(SUM(M25:M${_dcLastDr}),2)`};_dcfM.numFmt='#,##0.00';
+  const _dcfM2=ws.getCell(41,13);_dcfM2.value={formula:`ROUND(K41,2)`};_dcfM2.numFmt='#,##0.00';
   ws.getCell(45,8).value={formula:`H40`};ws.getCell(45,9).value='Pcs';
-  const _dcfG=ws.getCell(45,11);_dcfG.value={formula:`ROUND(K40+K41,0)`};_dcfG.numFmt='#,##0.##';
+  const _dcfG=ws.getCell(45,11);_dcfG.value={formula:`ROUND(K40+K41,0)`};_dcfG.numFmt='#,##0';
   ws.getCell(46,4).value=numToWordsIN(grand);   // words — static (Excel has no built-in)
   ws.getCell(47,4).value=numToWordsIN(totIGST);
 }
@@ -1291,13 +1293,14 @@ function fillRPInvSheet(wb,P){
     const r=24+idx;
     ws.getCell(r,1).value=li.sr;ws.getCell(r,2).value=li.hsn;ws.getCell(r,3).value=li.art;
     ws.getCell(r,4).value=li.style;ws.getCell(r,5).value=li.desc;ws.getCell(r,6).value=li.colour;
-    ws.getCell(r,7).value='RP';ws.getCell(r,8).value=li.qty;
-    const _mrpCell=ws.getCell(r,9);_mrpCell.value=Math.round((li.mrp||0)*100)/100;_mrpCell.numFmt='#,##0.##'; // I = MRP
-    const _rjCell=ws.getCell(r,10);_rjCell.value=Math.round(li.rate*100)/100;_rjCell.numFmt='#,##0.##'; // J = Rate
-    const _rkCell=ws.getCell(r,11);_rkCell.value={formula:`ROUND(H${r}*5*J${r},2)`};_rkCell.numFmt='#,##0.##'; // K = Amount
+    ws.getCell(r,7).value='RP';
+    const _rhCell=ws.getCell(r,8);_rhCell.value=Math.round(li.qty);_rhCell.numFmt='#,##0'; // H = QTY integer
+    const _mrpCell=ws.getCell(r,9);_mrpCell.value=Math.round((li.mrp||0)*100)/100;_mrpCell.numFmt='#,##0.00'; // I = MRP
+    const _rjCell=ws.getCell(r,10);_rjCell.value=Math.round(li.rate*100)/100;_rjCell.numFmt='#,##0.00'; // J = Rate
+    const _rkCell=ws.getCell(r,11);_rkCell.value={formula:`ROUND(H${r}*5*J${r},2)`};_rkCell.numFmt='#,##0.00'; // K = Amount
     ws.getCell(r,12).value=Math.round(li.igstP*100)+'%';          // L = "5%" as text
-    ws.getCell(r,13).value={formula:`ROUND(K${r}*${li.igstP},2)`};ws.getCell(r,13).numFmt='#,##0.##'; // M = IGST Amount
-    ws.getCell(r,14).value={formula:`ROUND(K${r}+M${r},2)`};ws.getCell(r,14).numFmt='#,##0.##'; // N = Total
+    ws.getCell(r,13).value={formula:`ROUND(K${r}*${li.igstP},2)`};ws.getCell(r,13).numFmt='#,##0.00'; // M = IGST Amount
+    ws.getCell(r,14).value={formula:`ROUND(K${r}+M${r},2)`};ws.getCell(r,14).numFmt='#,##0.00'; // N = Total
   });
   // auto-fit Product Description col5
   const _pd5rp=Math.max(20,...LI.map(l=>String(l.desc||'').length));
@@ -1306,12 +1309,12 @@ function fillRPInvSheet(wb,P){
   const grand=Math.round(subAmt+totIGST);
   const igstPct=((items[0]?.tax)||5).toFixed(1);
   // footer — fully formula-based
-  ws.getCell(foRow,8).value={formula:`SUM(H24:H${_rpLastDr})`};   // total qty
-  const _fK=ws.getCell(foRow,11);_fK.value={formula:`ROUND(SUM(K24:K${_rpLastDr}),2)`};_fK.numFmt='#,##0.##';  // subtotal
-  const _fM=ws.getCell(foRow+1,11);_fM.value={formula:`ROUND(SUM(M24:M${_rpLastDr}),2)`};_fM.numFmt='#,##0.##'; // IGST total
-  const _fM2=ws.getCell(foRow+1,13);_fM2.value={formula:`ROUND(K${foRow+1},2)`};_fM2.numFmt='#,##0.##';
+  const _rh40=ws.getCell(foRow,8);_rh40.value={formula:`SUM(H24:H${_rpLastDr})`};_rh40.numFmt='#,##0'; // total qty integer
+  const _fK=ws.getCell(foRow,11);_fK.value={formula:`ROUND(SUM(K24:K${_rpLastDr}),2)`};_fK.numFmt='#,##0.00';  // subtotal
+  const _fM=ws.getCell(foRow+1,11);_fM.value={formula:`ROUND(SUM(M24:M${_rpLastDr}),2)`};_fM.numFmt='#,##0.00'; // IGST total
+  const _fM2=ws.getCell(foRow+1,13);_fM2.value={formula:`ROUND(K${foRow+1},2)`};_fM2.numFmt='#,##0.00';
   ws.getCell(foRow+4,8).value={formula:`H${foRow}`};ws.getCell(foRow+4,9).value='Pcs';
-  const _fG=ws.getCell(foRow+4,11);_fG.value={formula:`ROUND(K${foRow}+K${foRow+1},0)`};_fG.numFmt='#,##0.##'; // grand total
+  const _fG=ws.getCell(foRow+4,11);_fG.value={formula:`ROUND(K${foRow}+K${foRow+1},0)`};_fG.numFmt='#,##0'; // grand total integer
   ws.getCell(foRow+5,4).value=numToWordsIN(grand);   // words — static
   ws.getCell(foRow+6,4).value=numToWordsIN(totIGST);
 }
