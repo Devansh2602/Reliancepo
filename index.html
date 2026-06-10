@@ -2107,11 +2107,14 @@ function _stickerStyle(cell,halign,bold,fontSize){
 
 function fillDCStickerBlock(ws,bs,ctn,totalCtns,invStr,poNum,styleName,pkgDate){
   const c=(off,col)=>ws.getCell(bs+off,col);
+  // Force-clear before writing so stale template placeholders don't persist
+  [c(3,5),c(4,5),c(5,5),c(6,5),c(13,5)].forEach(cell=>{cell.value=null;});
   // text fields — left align, size 14
-  const tf=[c(3,5),c(4,5),c(5,5),c(13,5)];
+  const tf=[c(3,5),c(4,5),c(5,5),c(6,5),c(13,5)];
   c(3,5).value=`Invoice No:- ${invStr}`;
   c(4,5).value=`Po Number :- ${poNum}`;
   c(5,5).value=`Style:- ${styleName}`;
+  c(6,5).value=`Po Type :- DC`;
   c(13,5).value=`Pkg Date : ${pkgDate}`;
   tf.forEach(cell=>_stickerStyle(cell,'left',false,14));
   // carton number — center, bold, size 14
