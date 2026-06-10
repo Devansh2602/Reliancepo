@@ -1132,14 +1132,17 @@ async function genExcel(){
   if(isRP){fillRPInvSheet(wb,P2);fillRPPLSheet(wb,P2);}
   else{fillDCInvSheet(wb,P2);fillDCPLSheet(wb,P2);}
 
-  // Add carton sticker as 3rd worksheet — BEFORE writeBuffer so styles stay in same workbook
+  const buf=await wb.xlsx.writeBuffer();
+
+  // Merge carton sticker as 3rd worksheet using style-remapping (preserves borders/fills)
+  let finalBuf=buf;
   try{
     const stickerParams={invNum,dcCode,fmtField,ppb,pkgDateFmt,poNum,isRP,ppk,packsPerCtn,items};
-    await _addStickerToWb(wb,stickerParams);
-  }catch(se){console.warn('Sticker sheet failed:',se);}
+    const stickerBuf=await _buildStickerBuffer(stickerParams);
+    if(stickerBuf) finalBuf=await _mergeWorkbookWithSticker(buf,stickerBuf);
+  }catch(se){console.warn('Sticker merge failed:',se);}
 
-  const buf=await wb.xlsx.writeBuffer();
-  const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const blob=new Blob([finalBuf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
   const a=document.createElement('a');
   a.href=URL.createObjectURL(blob);
   a.download=`${invNum}-${dcInfo.dcName||dcCode},${fmtField}.xlsx`;
@@ -2360,83 +2363,114 @@ async function ensureBlocks(rawBuf,sheetName,neededBlocks,blockSize){
   }catch(e){console.warn('ensureBlocks failed:',e);return rawBuf;}
 }
 
-// Copy an ExcelJS worksheet into another workbook (preserves styles, borders, merges)
-function _copyWorksheet(srcWs,destWb,name,lastRow){
-  const destWs=destWb.addWorksheet(name);
-  // column widths (A–H = 8 cols for sticker)
-  for(let ci=1;ci<=8;ci++){
-    const srcCol=srcWs.getColumn(ci);
-    if(srcCol&&srcCol.width)destWs.getColumn(ci).width=srcCol.width;
-  }
-  // rows up to lastRow (skip empties beyond fill area)
-  const maxRow=lastRow||srcWs.rowCount;
-  for(let rn=1;rn<=maxRow;rn++){
-    const srcRow=srcWs.getRow(rn);
-    const destRow=destWs.getRow(rn);
-    if(srcRow.height)destRow.height=srcRow.height;
-    for(let cn=1;cn<=8;cn++){
-      const srcCell=srcRow.getCell(cn);
-      const destCell=destRow.getCell(cn);
-      if(srcCell.value!=null)destCell.value=srcCell.value;
-      try{
-        const s=srcCell.style;
-        if(s&&Object.keys(s).length)destCell.style=JSON.parse(JSON.stringify(s));
-      }catch(_){}
-    }
-  }
-  // merged cells
+// Merge sticker buffer into invoice buffer via JSZip with proper style remapping.
+// Appends sticker fonts/fills/borders to invoice styles.xml so all s="N" indices
+// are correctly remapped — borders, fills, and fonts are fully preserved.
+async function _mergeWorkbookWithSticker(invBuf,stickerBuf){
+  if(typeof JSZip==='undefined')return invBuf;
   try{
-    const merges=(srcWs.model&&srcWs.model.merges)||[];
-    merges.forEach(m=>{
-      // only copy merges within our row range
-      const rowM=m.match(/[A-Z]+(\d+):[A-Z]+(\d+)/);
-      if(rowM&&+rowM[1]<=maxRow){
-        try{destWs.mergeCells(m);}catch(_){}
-      }
-    });
-  }catch(_){}
-  return destWs;
-}
+    const invZip=await JSZip.loadAsync(invBuf);
+    const stkZip=await JSZip.loadAsync(stickerBuf);
 
-// Load sticker template, fill blocks, and add as "Carton Sticker" sheet to invWb
-// Using same ExcelJS workbook ensures styles/borders are transferred correctly
-async function _addStickerToWb(invWb,params){
-  const{invNum,dcCode,ppb,pkgDateFmt,poNum,isRP,ppk,packsPerCtn,items}=params;
-  if(!items||!items.length)return;
-  const sheetName=isRP?CTN_RP_SHEET[dcCode]:CTN_DC_SHEET[dcCode];
-  const blockSize=isRP?RP_BLOCK_SIZE:DC_BLOCK_SIZE;
-  const styleName=items[0]?.desc||'';
-  const invStr=`GS/${invNum}`;
-  const{cartons,totalCtns}=isRP?computeRPCartons(items,packsPerCtn):computeDCCartons(items,ppb);
-  if(!cartons.length)return;
-  const b64=isRP?TMPL_CTN_RP:TMPL_CTN_DC;
-  const bin=atob(b64);const raw=new Uint8Array(bin.length);
-  for(let i=0;i<bin.length;i++)raw[i]=bin.charCodeAt(i);
-  const cleanBuf=await cleanTemplateZip(raw.buffer);
-  const extBuf=await ensureBlocks(cleanBuf,sheetName,cartons.length,blockSize);
-  const stickerWb=new ExcelJS.Workbook();
-  await stickerWb.xlsx.load(extBuf);
-  const stickerWs=stickerWb.getWorksheet(sheetName);
-  if(!stickerWs)return;
-  stickerWs.views=[{state:'normal',showGridLines:false}];
-  // Find block starts
-  const allHUL=[];
-  stickerWs.eachRow({includeEmpty:false},(row,rn)=>{
-    row.eachCell({includeEmpty:false},cell=>{if(cell.value==='HANDLING UNIT LABEL')allHUL.push(rn);});
-  });
-  let blockStarts=allHUL.filter((rn,i)=>i===allHUL.length-1||allHUL[i+1]-rn>2);
-  if(!blockStarts.length)return;
-  if(blockStarts.length<cartons.length){
-    const origin=blockStarts[0];blockStarts=[];
-    for(let i=0;i<cartons.length;i++)blockStarts.push(origin+i*blockSize);
-  }
-  cartons.forEach((ctn,idx)=>{
-    if(isRP)fillRPStickerBlock(stickerWs,blockStarts[idx]-1,ctn,totalCtns,invStr,poNum,styleName,pkgDateFmt);
-    else    fillDCStickerBlock(stickerWs,blockStarts[idx]-1,ctn,totalCtns,invStr,poNum,styleName,pkgDateFmt);
-  });
-  const lastUsedRow=blockStarts[cartons.length-1]+(blockSize-1);
-  // Copy into invoice workbook — styles travel with the cells
-  _copyWorksheet(stickerWs,invWb,'Carton Sticker',lastUsedRow);
+    // ── sticker worksheet XML ─────────────────────────────────────────────────
+    const stkWsPath=Object.keys(stkZip.files).find(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p));
+    if(!stkWsPath)return invBuf;
+    let stkWsXml=await stkZip.file(stkWsPath).async('string');
+
+    // Convert shared strings → inline strings (sticker has its own sharedStrings)
+    const ssFile=stkZip.file('xl/sharedStrings.xml');
+    if(ssFile){
+      const ssXml=await ssFile.async('string');
+      const strings=[];
+      for(const m of ssXml.matchAll(/<si>([\s\S]*?)<\/si>/g)){
+        strings.push([...m[1].matchAll(/<t(?:\s[^>]*)?>([^<]*)<\/t>/g)].map(t=>t[1]).join(''));
+      }
+      stkWsXml=stkWsXml.replace(/<c\b([^>]*)><v>(\d+)<\/v><\/c>/g,(m,attrs,idx)=>{
+        if(!attrs.includes('t="s"'))return m;
+        const str=(strings[+idx]||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        return `<c ${attrs.replace(/\s*t="s"/,'').trim()} t="inlineStr"><is><t>${str}</t></is></c>`;
+      });
+    }
+
+    // ── style merge ───────────────────────────────────────────────────────────
+    let invSty=await invZip.file('xl/styles.xml').async('string');
+    const stkSty=await stkZip.file('xl/styles.xml').async('string');
+
+    // Extract all <TAG>...</TAG> items from a list element
+    function extractList(xml,listTag,itemTag){
+      const block=xml.match(new RegExp(`<${listTag}[^>]*>([\\s\\S]*?)<\\/${listTag}>`))||[];
+      const body=block[1]||'';
+      const re=new RegExp(`<${itemTag}(?:\\s[^>]*)?\\/?>(?:[\\s\\S]*?<\\/${itemTag}>)?`,'g');
+      return [...body.matchAll(re)].map(m=>m[0]);
+    }
+    function countIn(xml,listTag){
+      const m=xml.match(new RegExp(`<${listTag}\\s[^>]*count="(\\d+)"`));return m?+m[1]:0;
+    }
+    function appendToList(xml,listTag,items){
+      if(!items.length)return xml;
+      xml=xml.replace(new RegExp(`(</${listTag}>)`),items.join('')+'$1');
+      xml=xml.replace(new RegExp(`(<${listTag}[^>]*count=")\\d+(")`),
+        (_,a,b)=>`${a}${countIn(xml,listTag)+items.length}${b}`);
+      // re-count after insert
+      const total=[...xml.matchAll(new RegExp(`<${itemTag(listTag)}[\\s\\S]*?>`,'g'))].length;
+      return xml.replace(new RegExp(`(<${listTag}[^>]*count=")\\d+(")`),`$1${total}$2`);
+    }
+    function itemTag(listTag){
+      return {fonts:'font',fills:'fill',borders:'border',cellXfs:'xf'}[listTag]||listTag.slice(0,-1);
+    }
+
+    const invFontN=extractList(invSty,'fonts','font').length;
+    const invFillN=extractList(invSty,'fills','fill').length;
+    const invBorderN=extractList(invSty,'borders','border').length;
+    const invXfN=extractList(invSty,'cellXfs','xf').length;
+
+    const stkFonts=extractList(stkSty,'fonts','font');
+    const stkFills=extractList(stkSty,'fills','fill');
+    const stkBorders=extractList(stkSty,'borders','border');
+    const stkXfs=extractList(stkSty,'cellXfs','xf').map(xf=>xf
+      .replace(/\bfontId="(\d+)"/g,(_,n)=>`fontId="${+n+invFontN}"`)
+      .replace(/\bfillId="(\d+)"/g,(_,n)=>`fillId="${+n+invFillN}"`)
+      .replace(/\bborderId="(\d+)"/g,(_,n)=>`borderId="${+n+invBorderN}"`)
+      .replace(/\bxfId="\d+"/g,'xfId="0"')   // base style always 0
+    );
+
+    // Append sticker styles
+    if(stkFonts.length){invSty=invSty.replace('</fonts>',stkFonts.join('')+'</fonts>');
+      invSty=invSty.replace(/(<fonts\s[^>]*count=")(\d+)(")/,(_,a,n,b)=>`${a}${+n+stkFonts.length}${b}`);}
+    if(stkFills.length){invSty=invSty.replace('</fills>',stkFills.join('')+'</fills>');
+      invSty=invSty.replace(/(<fills\s[^>]*count=")(\d+)(")/,(_,a,n,b)=>`${a}${+n+stkFills.length}${b}`);}
+    if(stkBorders.length){invSty=invSty.replace('</borders>',stkBorders.join('')+'</borders>');
+      invSty=invSty.replace(/(<borders\s[^>]*count=")(\d+)(")/,(_,a,n,b)=>`${a}${+n+stkBorders.length}${b}`);}
+    if(stkXfs.length){invSty=invSty.replace('</cellXfs>',stkXfs.join('')+'</cellXfs>');
+      invSty=invSty.replace(/(<cellXfs\s[^>]*count=")(\d+)(")/,(_,a,n,b)=>`${a}${+n+stkXfs.length}${b}`);}
+
+    invZip.file('xl/styles.xml',invSty);
+
+    // Remap sticker sheet s="N" → new index
+    stkWsXml=stkWsXml.replace(/\bs="(\d+)"/g,(_,n)=>`s="${+n+invXfN}"`);
+
+    // ── add sticker sheet to invoice workbook ─────────────────────────────────
+    const invWbXml=await invZip.file('xl/workbook.xml').async('string');
+    const usedIds=[...invWbXml.matchAll(/sheetId="(\d+)"/g)].map(m=>+m[1]);
+    const newId=Math.max(0,...usedIds)+1;
+    const newFile=`sheet${newId}.xml`;
+    const newRid=`rId${newId+20}`;
+
+    invZip.file(`xl/worksheets/${newFile}`,stkWsXml);
+    invZip.file('xl/workbook.xml',invWbXml.replace('</sheets>',
+      `<sheet name="Carton Sticker" sheetId="${newId}" r:id="${newRid}"/></sheets>`));
+
+    let wbRels=await invZip.file('xl/_rels/workbook.xml.rels').async('string');
+    invZip.file('xl/_rels/workbook.xml.rels',wbRels.replace('</Relationships>',
+      `<Relationship Id="${newRid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/${newFile}"/></Relationships>`));
+
+    let ct=await invZip.file('[Content_Types].xml').async('string');
+    if(!ct.includes(newFile))
+      invZip.file('[Content_Types].xml',ct.replace('</Types>',
+        `<Override PartName="/xl/worksheets/${newFile}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`));
+
+    return invZip.generateAsync({type:'arraybuffer'});
+  }catch(e){console.warn('_mergeWorkbookWithSticker failed:',e);return invBuf;}
 }
 
 // Build sticker buffer (same pipeline as genCtnSticker but returns buffer, no download)
