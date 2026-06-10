@@ -1224,7 +1224,7 @@ function fillDCInvSheet(wb,P){
     ws.getCell(r,1).value=li.sr;ws.getCell(r,2).value=li.hsn;ws.getCell(r,3).value=li.art;
     ws.getCell(r,4).value=li.style;ws.getCell(r,5).value=li.desc;ws.getCell(r,6).value=li.colour;
     ws.getCell(r,7).value=li.sz;ws.getCell(r,8).value=li.qty;ws.getCell(r,9).value='PCS';
-    ws.getCell(r,10).value=Math.round(li.rate*100)/100;         // J = Rate (editable, rounded to paise)
+    const _jCell=ws.getCell(r,10);_jCell.value=Math.round(li.rate*100)/100;_jCell.numFmt='#,##0.##'; // J = Rate
     const _kCell=ws.getCell(r,11);_kCell.value={formula:`ROUND(H${r}*J${r},2)`};_kCell.numFmt='#,##0.##'; // K = Amount
     ws.getCell(r,12).value=Math.round(li.igstP*100)+'%';        // L = "5%" as text
     ws.getCell(r,13).value={formula:`ROUND(K${r}*${li.igstP},2)`};ws.getCell(r,13).numFmt='#,##0.##'; // M = IGST Amount
@@ -1291,8 +1291,9 @@ function fillRPInvSheet(wb,P){
     const r=24+idx;
     ws.getCell(r,1).value=li.sr;ws.getCell(r,2).value=li.hsn;ws.getCell(r,3).value=li.art;
     ws.getCell(r,4).value=li.style;ws.getCell(r,5).value=li.desc;ws.getCell(r,6).value=li.colour;
-    ws.getCell(r,7).value='RP';ws.getCell(r,8).value=li.qty;ws.getCell(r,9).value=li.mrp;
-    ws.getCell(r,10).value=Math.round(li.rate*100)/100;           // J = Rate per piece (= cu/5)
+    ws.getCell(r,7).value='RP';ws.getCell(r,8).value=li.qty;
+    const _mrpCell=ws.getCell(r,9);_mrpCell.value=Math.round((li.mrp||0)*100)/100;_mrpCell.numFmt='#,##0.##'; // I = MRP
+    const _rjCell=ws.getCell(r,10);_rjCell.value=Math.round(li.rate*100)/100;_rjCell.numFmt='#,##0.##'; // J = Rate
     const _rkCell=ws.getCell(r,11);_rkCell.value={formula:`ROUND(H${r}*5*J${r},2)`};_rkCell.numFmt='#,##0.##'; // K = Amount
     ws.getCell(r,12).value=Math.round(li.igstP*100)+'%';          // L = "5%" as text
     ws.getCell(r,13).value={formula:`ROUND(K${r}*${li.igstP},2)`};ws.getCell(r,13).numFmt='#,##0.##'; // M = IGST Amount
