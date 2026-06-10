@@ -2369,26 +2369,34 @@ async function ensureBlocks(rawBuf,sheetName,neededBlocks,blockSize){
 async function _mergeWorkbookWithSticker(invBuf,stickerBuf){
   if(typeof JSZip==='undefined')return invBuf;
   try{
-    const invZip=await JSZip.loadAsync(invBuf);
+    // Clean invoice buf first (strip any leftover printerSettings / calcChain refs)
+    const cleanedInv=await cleanTemplateZip(invBuf);
+    const invZip=await JSZip.loadAsync(cleanedInv);
     const stkZip=await JSZip.loadAsync(stickerBuf);
 
     // ── sticker worksheet XML ─────────────────────────────────────────────────
     const stkWsPath=Object.keys(stkZip.files).find(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p));
-    if(!stkWsPath)return invBuf;
+    if(!stkWsPath){console.warn('[merge] no sticker sheet found');return invBuf;}
     let stkWsXml=await stkZip.file(stkWsPath).async('string');
 
-    // Convert shared strings → inline strings (sticker has its own sharedStrings)
+    // Convert sticker shared-string cells → inline strings
+    // (sticker has its own sharedStrings which won't exist in the merged workbook)
     const ssFile=stkZip.file('xl/sharedStrings.xml');
     if(ssFile){
       const ssXml=await ssFile.async('string');
       const strings=[];
       for(const m of ssXml.matchAll(/<si>([\s\S]*?)<\/si>/g)){
-        strings.push([...m[1].matchAll(/<t(?:\s[^>]*)?>([^<]*)<\/t>/g)].map(t=>t[1]).join(''));
+        strings.push([...m[1].matchAll(/<t(?:[^>]*)?>([^<]*)<\/t>/g)].map(t=>t[1]).join(''));
       }
-      stkWsXml=stkWsXml.replace(/<c\b([^>]*)><v>(\d+)<\/v><\/c>/g,(m,attrs,idx)=>{
+      // Match <c ...><v>INDEX</v></c> where t="s" is in attributes
+      stkWsXml=stkWsXml.replace(/<c(\s[^>]*)><v>(\d+)<\/v><\/c>/g,(m,attrs,idx)=>{
         if(!attrs.includes('t="s"'))return m;
-        const str=(strings[+idx]||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-        return `<c ${attrs.replace(/\s*t="s"/,'').trim()} t="inlineStr"><is><t>${str}</t></is></c>`;
+        // Get raw string (already XML-escaped in sharedStrings)
+        const raw=strings[+idx]||'';
+        // Strip s= attribute and t= attribute, then rebuild as inlineStr
+        const sAttr=(attrs.match(/\bs="(\d+)"/))?.[0]||'';
+        const rAttr=(attrs.match(/\br="[^"]*"/))?.[0]||'';
+        return `<c ${rAttr}${sAttr?' '+sAttr:''} t="inlineStr"><is><t>${raw}</t></is></c>`;
       });
     }
 
@@ -2396,57 +2404,85 @@ async function _mergeWorkbookWithSticker(invBuf,stickerBuf){
     let invSty=await invZip.file('xl/styles.xml').async('string');
     const stkSty=await stkZip.file('xl/styles.xml').async('string');
 
-    // Extract all <TAG>...</TAG> items from a list element
-    function extractList(xml,listTag,itemTag){
-      const block=xml.match(new RegExp(`<${listTag}[^>]*>([\\s\\S]*?)<\\/${listTag}>`))||[];
-      const body=block[1]||'';
-      const re=new RegExp(`<${itemTag}(?:\\s[^>]*)?\\/?>(?:[\\s\\S]*?<\\/${itemTag}>)?`,'g');
-      return [...body.matchAll(re)].map(m=>m[0]);
-    }
-    function countIn(xml,listTag){
-      const m=xml.match(new RegExp(`<${listTag}\\s[^>]*count="(\\d+)"`));return m?+m[1]:0;
-    }
-    function appendToList(xml,listTag,items){
-      if(!items.length)return xml;
-      xml=xml.replace(new RegExp(`(</${listTag}>)`),items.join('')+'$1');
-      xml=xml.replace(new RegExp(`(<${listTag}[^>]*count=")\\d+(")`),
-        (_,a,b)=>`${a}${countIn(xml,listTag)+items.length}${b}`);
-      // re-count after insert
-      const total=[...xml.matchAll(new RegExp(`<${itemTag(listTag)}[\\s\\S]*?>`,'g'))].length;
-      return xml.replace(new RegExp(`(<${listTag}[^>]*count=")\\d+(")`),`$1${total}$2`);
-    }
-    function itemTag(listTag){
-      return {fonts:'font',fills:'fill',borders:'border',cellXfs:'xf'}[listTag]||listTag.slice(0,-1);
+    // Extract all complete child elements from a named list (handles self-closing + open/close)
+    function extractItems(xml, listTag, childTag){
+      // Extract the body of the list element
+      const listRe=new RegExp(`<${listTag}[^>]*>([\\s\\S]*?)<\\/${listTag}>`,'i');
+      const listM=xml.match(listRe);
+      if(!listM)return [];
+      const body=listM[1];
+      const items=[];
+      let pos=0;
+      while(pos<body.length){
+        const start=body.indexOf(`<${childTag}`,pos);
+        if(start===-1)break;
+        // Check self-closing: scan for /> or > (whichever comes first after <tag)
+        let i=start+childTag.length+1;
+        while(i<body.length&&body[i]!='>'&&!(body[i]=='/'&&body[i+1]=='>'))i++;
+        if(i>=body.length)break;
+        if(body[i]==='/'&&body[i+1]==='>'){
+          // self-closing
+          items.push(body.slice(start,i+2));
+          pos=i+2;
+        }else{
+          // open tag — find matching close tag
+          const closeTag=`</${childTag}>`;
+          const closePos=body.indexOf(closeTag,i+1);
+          if(closePos===-1){items.push(body.slice(start,i+1));pos=i+1;}
+          else{items.push(body.slice(start,closePos+closeTag.length));pos=closePos+closeTag.length;}
+        }
+      }
+      return items;
     }
 
-    const invFontN=extractList(invSty,'fonts','font').length;
-    const invFillN=extractList(invSty,'fills','fill').length;
-    const invBorderN=extractList(invSty,'borders','border').length;
-    const invXfN=extractList(invSty,'cellXfs','xf').length;
+    // Count entries in a style list element
+    function countItems(xml,listTag,childTag){return extractItems(xml,listTag,childTag).length;}
 
-    const stkFonts=extractList(stkSty,'fonts','font');
-    const stkFills=extractList(stkSty,'fills','fill');
-    const stkBorders=extractList(stkSty,'borders','border');
-    const stkXfs=extractList(stkSty,'cellXfs','xf').map(xf=>xf
-      .replace(/\bfontId="(\d+)"/g,(_,n)=>`fontId="${+n+invFontN}"`)
-      .replace(/\bfillId="(\d+)"/g,(_,n)=>`fillId="${+n+invFillN}"`)
+    // Update count= attribute on a list element; add it if missing
+    function updateCount(xml,listTag,newCount){
+      if(xml.match(new RegExp(`<${listTag}[^>]*count="`))){
+        return xml.replace(new RegExp(`(<${listTag}[^>]*count=")\\d+(")`),`$1${newCount}$2`);
+      }
+      return xml.replace(new RegExp(`(<${listTag})`),`$1 count="${newCount}"`);
+    }
+
+    const invFontN  =countItems(invSty,'fonts','font');
+    const invFillN  =countItems(invSty,'fills','fill');
+    const invBorderN=countItems(invSty,'borders','border');
+    const invXfN    =countItems(invSty,'cellXfs','xf');
+
+    console.log('[sticker-merge] inv fonts='+invFontN+' fills='+invFillN+' borders='+invBorderN+' xfs='+invXfN);
+
+    const stkFonts  =extractItems(stkSty,'fonts','font');
+    const stkFills  =extractItems(stkSty,'fills','fill');
+    const stkBorders=extractItems(stkSty,'borders','border');
+    const stkXfsRaw =extractItems(stkSty,'cellXfs','xf');
+
+    console.log('[sticker-merge] stk fonts='+stkFonts.length+' fills='+stkFills.length+' borders='+stkBorders.length+' xfs='+stkXfsRaw.length);
+
+    // Remap sticker xf entries: shift all style IDs by invoice counts
+    const stkXfs=stkXfsRaw.map(xf=>xf
+      .replace(/\bfontId="(\d+)"/g,  (_,n)=>`fontId="${+n+invFontN}"`)
+      .replace(/\bfillId="(\d+)"/g,  (_,n)=>`fillId="${+n+invFillN}"`)
       .replace(/\bborderId="(\d+)"/g,(_,n)=>`borderId="${+n+invBorderN}"`)
-      .replace(/\bxfId="\d+"/g,'xfId="0"')   // base style always 0
+      .replace(/\bxfId="\d+"/g,'xfId="0"')
     );
 
-    // Append sticker styles
-    if(stkFonts.length){invSty=invSty.replace('</fonts>',stkFonts.join('')+'</fonts>');
-      invSty=invSty.replace(/(<fonts\s[^>]*count=")(\d+)(")/,(_,a,n,b)=>`${a}${+n+stkFonts.length}${b}`);}
-    if(stkFills.length){invSty=invSty.replace('</fills>',stkFills.join('')+'</fills>');
-      invSty=invSty.replace(/(<fills\s[^>]*count=")(\d+)(")/,(_,a,n,b)=>`${a}${+n+stkFills.length}${b}`);}
-    if(stkBorders.length){invSty=invSty.replace('</borders>',stkBorders.join('')+'</borders>');
-      invSty=invSty.replace(/(<borders\s[^>]*count=")(\d+)(")/,(_,a,n,b)=>`${a}${+n+stkBorders.length}${b}`);}
-    if(stkXfs.length){invSty=invSty.replace('</cellXfs>',stkXfs.join('')+'</cellXfs>');
-      invSty=invSty.replace(/(<cellXfs\s[^>]*count=")(\d+)(")/,(_,a,n,b)=>`${a}${+n+stkXfs.length}${b}`);}
+    // Append sticker styles to invoice styles
+    function appendStyles(xml,listTag,childTag,newItems){
+      if(!newItems.length)return xml;
+      const newTotal=countItems(xml,listTag,childTag)+newItems.length;
+      xml=xml.replace(new RegExp(`<\\/${listTag}>`),newItems.join('')+`</${listTag}>`);
+      return updateCount(xml,listTag,newTotal);
+    }
 
+    invSty=appendStyles(invSty,'fonts',  'font',  stkFonts);
+    invSty=appendStyles(invSty,'fills',  'fill',  stkFills);
+    invSty=appendStyles(invSty,'borders','border',stkBorders);
+    invSty=appendStyles(invSty,'cellXfs','xf',    stkXfs);
     invZip.file('xl/styles.xml',invSty);
 
-    // Remap sticker sheet s="N" → new index
+    // Remap all s="N" cell-style references in sticker worksheet
     stkWsXml=stkWsXml.replace(/\bs="(\d+)"/g,(_,n)=>`s="${+n+invXfN}"`);
 
     // ── add sticker sheet to invoice workbook ─────────────────────────────────
