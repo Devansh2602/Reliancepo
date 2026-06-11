@@ -2446,12 +2446,14 @@ async function _mergeWorkbookWithSticker(invBuf,stickerBuf){
       for(const m of ssXml.matchAll(/<si>([\s\S]*?)<\/si>/g)){
         strings.push([...m[1].matchAll(/<t(?:[^>]*)?>([^<]*)<\/t>/g)].map(t=>t[1]).join(''));
       }
-      // Match <c ...><v>INDEX</v></c> where t="s" is in attributes
-      stkWsXml=stkWsXml.replace(/<c(\s[^>]*)><v>(\d+)<\/v><\/c>/g,(m,attrs,idx)=>{
+      // Match <c ...><v>INDEX</v></c> OR <c ...><f>...</f><v>INDEX</v></c> where t="s" is in attributes
+      // The second form covers formula cells whose cached result is a shared string — these must also
+      // be converted to inline strings, otherwise the stale sticker indices corrupt the merged workbook.
+      stkWsXml=stkWsXml.replace(/<c(\s[^>]*)>(?:<f(?:[^>]*)>[\s\S]*?<\/f>)?<v>(\d+)<\/v><\/c>/g,(m,attrs,idx)=>{
         if(!attrs.includes('t="s"'))return m;
         // Get raw string (already XML-escaped in sharedStrings)
         const raw=strings[+idx]||'';
-        // Strip s= attribute and t= attribute, then rebuild as inlineStr
+        // Strip s= attribute and t= attribute, then rebuild as inlineStr (drop formula — value is baked in)
         const sAttr=(attrs.match(/\bs="(\d+)"/))?.[0]||'';
         const rAttr=(attrs.match(/\br="[^"]*"/))?.[0]||'';
         return `<c ${rAttr}${sAttr?' '+sAttr:''} t="inlineStr"><is><t>${raw}</t></is></c>`;
@@ -2598,6 +2600,7 @@ async function _fixMergedWb(buf){
       relsMap[m[1]]=m[2];
     const hasStyles=!!zip.file('xl/styles.xml');
     const hasSS=!!zip.file('xl/sharedStrings.xml');
+    const hasTheme=!!zip.file('xl/theme/theme1.xml');
     // 5. Rebuild minimal workbook.xml — no workbookProtection, definedNames, calcPr
     const sheetsXml=sheets.map(s=>`<sheet name="${s.name}" sheetId="${s.sheetId}" r:id="${s.rid}"/>`).join('');
     zip.file('xl/workbook.xml',
@@ -2607,7 +2610,7 @@ async function _fixMergedWb(buf){
       `<bookViews><workbookView xWindow="0" yWindow="0" windowWidth="14400" windowHeight="8400"/></bookViews>`+
       `<sheets>${sheetsXml}</sheets>`+
       `</workbook>`);
-    // 6. Rebuild minimal workbook.xml.rels — only sheets + styles + sharedStrings
+    // 6. Rebuild minimal workbook.xml.rels — sheets + styles + sharedStrings + theme (if present)
     const allNums=[...wbRels.matchAll(/Id="rId(\d+)"/g)].map(m=>+m[1]);
     let nxt=Math.max(0,...allNums)+1;
     let rBody=sheets.map(s=>{
@@ -2616,6 +2619,7 @@ async function _fixMergedWb(buf){
     }).join('');
     if(hasStyles) rBody+=`<Relationship Id="rId${nxt++}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>`;
     if(hasSS) rBody+=`<Relationship Id="rId${nxt++}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>`;
+    if(hasTheme) rBody+=`<Relationship Id="rId${nxt++}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>`;
     zip.file('xl/_rels/workbook.xml.rels',
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`+
       `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`+
