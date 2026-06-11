@@ -1137,8 +1137,13 @@ async function genExcel(){
   let finalBuf=buf;
   try{
     const stickerParams={invNum,dcCode,fmtField,ppb,pkgDateFmt,poNum,isRP,ppk,packsPerCtn,items};
+    console.log('[pack] building sticker buffer...');
     const stickerBuf=await _buildStickerBuffer(stickerParams);
-    if(stickerBuf) finalBuf=await _mergeWorkbookWithSticker(buf,stickerBuf);
+    console.log('[pack] stickerBuf='+(stickerBuf?'OK ('+stickerBuf.byteLength+' bytes)':'NULL'));
+    if(stickerBuf){
+      finalBuf=await _mergeWorkbookWithSticker(buf,stickerBuf);
+      console.log('[pack] merge done, finalBuf='+finalBuf.byteLength+' bytes');
+    }
   }catch(se){console.warn('Sticker merge failed:',se);}
 
   const blob=new Blob([finalBuf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
@@ -2774,13 +2779,14 @@ async function _fixMergedWb(buf){
 // Build sticker buffer (same pipeline as genCtnSticker but returns buffer, no download)
 async function _buildStickerBuffer(params){
   const{invNum,dcCode,ppb,pkgDateFmt,poNum,isRP,ppk,packsPerCtn,items}=params;
-  if(!items||!items.length)return null;
+  if(!items||!items.length){console.log('[sticker] no items');return null;}
   const sheetName=isRP?CTN_RP_SHEET[dcCode]:CTN_DC_SHEET[dcCode];
   const blockSize=isRP?RP_BLOCK_SIZE:DC_BLOCK_SIZE;
   const styleName=items[0]?.desc||'';
   const invStr=`GS/${invNum}`;
   const{cartons,totalCtns}=isRP?computeRPCartons(items,packsPerCtn):computeDCCartons(items,ppb);
-  if(!cartons.length)return null;
+  console.log('[sticker] sheetName='+sheetName+' cartons='+cartons.length);
+  if(!cartons.length){console.log('[sticker] no cartons');return null;}
   const b64=isRP?TMPL_CTN_RP:TMPL_CTN_DC;
   const bin=atob(b64);const raw=new Uint8Array(bin.length);
   for(let i=0;i<bin.length;i++)raw[i]=bin.charCodeAt(i);
@@ -2789,7 +2795,7 @@ async function _buildStickerBuffer(params){
   const wb=new ExcelJS.Workbook();
   await wb.xlsx.load(extBuf);
   const ws=wb.getWorksheet(sheetName);
-  if(!ws)return null;
+  if(!ws){console.warn('[sticker] worksheet "'+sheetName+'" not found! Available:',wb.worksheets.map(s=>s.name));return null;}
   ws.views=[{state:'normal',showGridLines:false}];
   wb.worksheets.forEach(s=>{if(s!==ws)s.views=[{state:'normal'}];});
   const allHUL=[];
@@ -2797,7 +2803,8 @@ async function _buildStickerBuffer(params){
     row.eachCell({includeEmpty:false},cell=>{if(cell.value==='HANDLING UNIT LABEL')allHUL.push(rn);});
   });
   let blockStarts=allHUL.filter((rn,i)=>i===allHUL.length-1||allHUL[i+1]-rn>2);
-  if(!blockStarts.length)return null;
+  console.log('[sticker] allHUL='+allHUL.length+' blockStarts='+blockStarts.length);
+  if(!blockStarts.length){console.warn('[sticker] no HUL rows found — sticker aborted');return null;}
   if(blockStarts.length<cartons.length){
     const origin=blockStarts[0];blockStarts=[];
     for(let i=0;i<cartons.length;i++)blockStarts.push(origin+i*blockSize);
