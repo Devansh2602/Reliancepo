@@ -2642,6 +2642,34 @@ async function _fixMergedWb(buf){
     if(zip.file('xl/calcChain.xml'))zip.remove('xl/calcChain.xml');
     let ct=await zip.file('[Content_Types].xml').async('string');
     ct=ct.replace(/<Override[^>]+calcChain\.xml[^>]*\/?>/g,'');
+    // Ensure all required OOXML parts have their correct content-type overrides.
+    // Invoice templates have no sharedStrings so Content_Types never declares it;
+    // ExcelJS always outputs sharedStrings.xml — missing declaration = corruption.
+    const ctParts=[
+      {file:'xl/sharedStrings.xml',
+       ct:'application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml',
+       path:'/xl/sharedStrings.xml'},
+      {file:'xl/styles.xml',
+       ct:'application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml',
+       path:'/xl/styles.xml'},
+      {file:'xl/theme/theme1.xml',
+       ct:'application/vnd.openxmlformats-officedocument.theme+xml',
+       path:'/xl/theme/theme1.xml'},
+    ];
+    for(const p of ctParts){
+      if(zip.file(p.file)&&!ct.includes(p.path)){
+        ct=ct.replace('</Types>',
+          `<Override PartName="${p.path}" ContentType="${p.ct}"/></Types>`);
+      }
+    }
+    // Also ensure every worksheet that exists has a content-type entry
+    for(const wsF of Object.keys(zip.files).filter(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p))){
+      const pn='/'+wsF;
+      if(!ct.includes(pn)){
+        ct=ct.replace('</Types>',
+          `<Override PartName="${pn}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`);
+      }
+    }
     zip.file('[Content_Types].xml',ct);
     // 2. Read current workbook XML and rels
     const wbXml=await zip.file('xl/workbook.xml').async('string');
