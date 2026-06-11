@@ -2541,12 +2541,45 @@ async function _mergeWorkbookWithSticker(invBuf,stickerBuf){
 
     console.log('[sticker-merge] stk fonts='+stkFonts.length+' fills='+stkFills.length+' borders='+stkBorders.length+' xfs='+stkXfsRaw.length);
 
-    // Remap sticker xf entries: shift all style IDs by invoice counts
+    // ── Merge custom number formats (numFmtId >= 164) ─────────────────────────
+    // The sticker uses numFmtId=164 ("0.000") for weight cells. Without merging
+    // this definition into the invoice styles, Excel reports "corrupt content".
+    const invNumFmtIds=new Set([...(invSty.matchAll(/\bnumFmtId="(\d+)"/g))].map(m=>+m[1]));
+    const invMaxCustomId=Math.max(163,...[...invNumFmtIds].filter(id=>id>=164));
+    const stkNumFmtBlock=stkSty.match(/<numFmts[^>]*>([\s\S]*?)<\/numFmts>/);
+    const fmtIdRemap={};  // sticker custom ID → new merged ID
+    let nextFmtId=invMaxCustomId+1;
+    const newNumFmtEntries=[];
+    if(stkNumFmtBlock){
+      for(const fm of stkNumFmtBlock[1].matchAll(/<numFmt\s[^>]*numFmtId="(\d+)"[^>]*\/?>/g)){
+        const origId=+fm[1];
+        if(origId>=164&&!invNumFmtIds.has(origId)){
+          const newId=nextFmtId++;
+          fmtIdRemap[origId]=newId;
+          newNumFmtEntries.push(fm[0].replace(`numFmtId="${origId}"`,`numFmtId="${newId}"`));
+        } else if(origId>=164){
+          fmtIdRemap[origId]=origId; // already present, keep as-is
+        }
+      }
+    }
+    if(newNumFmtEntries.length){
+      if(/<numFmts/.test(invSty)){
+        const existingCount=[...(invSty.matchAll(/<numFmt\b/g))].length;
+        invSty=invSty.replace(/<\/numFmts>/,newNumFmtEntries.join('')+'</numFmts>');
+        invSty=invSty.replace(/(<numFmts[^>]*count=")(\d+)(")/,`$1${existingCount+newNumFmtEntries.length}$3`);
+      } else {
+        // No numFmts section in invoice — insert one before <fonts>
+        invSty=invSty.replace(/<fonts/,`<numFmts count="${newNumFmtEntries.length}">${newNumFmtEntries.join('')}</numFmts><fonts`);
+      }
+    }
+
+    // Remap sticker xf entries: shift all style IDs by invoice counts + remap numFmtIds
     const stkXfs=stkXfsRaw.map(xf=>xf
       .replace(/\bfontId="(\d+)"/g,  (_,n)=>`fontId="${+n+invFontN}"`)
       .replace(/\bfillId="(\d+)"/g,  (_,n)=>`fillId="${+n+invFillN}"`)
       .replace(/\bborderId="(\d+)"/g,(_,n)=>`borderId="${+n+invBorderN}"`)
       .replace(/\bxfId="\d+"/g,'xfId="0"')
+      .replace(/\bnumFmtId="(\d+)"/g,(_,n)=>{const r=fmtIdRemap[+n];return r!=null?`numFmtId="${r}"`:_;})
     );
 
     // Append sticker styles to invoice styles
@@ -2562,6 +2595,13 @@ async function _mergeWorkbookWithSticker(invBuf,stickerBuf){
     invSty=appendStyles(invSty,'borders','border',stkBorders);
     invSty=appendStyles(invSty,'cellXfs','xf',    stkXfs);
     invZip.file('xl/styles.xml',invSty);
+
+    // Strip any r:id-referencing elements from sticker worksheet before inserting
+    // (drawings, legacy drawings, tables — these need a .rels file we don't include)
+    stkWsXml=stkWsXml.replace(/<drawing\s[^>]*\/>/g,'');
+    stkWsXml=stkWsXml.replace(/<legacyDrawing\s[^>]*\/>/g,'');
+    stkWsXml=stkWsXml.replace(/<tablePart\s[^>]*\/>/g,'');
+    stkWsXml=stkWsXml.replace(/<picture\s[^>]*\/>/g,'');
 
     // Remap all s="N" cell-style references in sticker worksheet
     stkWsXml=stkWsXml.replace(/\bs="(\d+)"/g,(_,n)=>`s="${+n+invXfN}"`);
