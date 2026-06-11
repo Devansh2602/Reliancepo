@@ -2376,12 +2376,22 @@ function _trimXmlRows(wsXml, maxRow){
   // Remove/clip mergeCell entries
   wsXml=wsXml.replace(/<mergeCell\s+ref="([A-Z]+)(\d+):([A-Z]+)(\d+)"\s*\/>/g,(m,c1,r1,c2,r2)=>{
     if(+r1>maxRow)return '';
-    if(+r2>maxRow)return `<mergeCell ref="${c1}${r1}:${c2}${maxRow}"/>`;
+    if(+r2>maxRow){
+      // Clip to maxRow, but if that produces a single-cell ref (same start/end cell) drop it —
+      // single-cell merges are invalid OOXML and cause Excel to remove ALL merge definitions.
+      if(c1===c2&&+r1===maxRow)return '';  // would become A5:A5 — drop
+      return `<mergeCell ref="${c1}${r1}:${c2}${maxRow}"/>`;
+    }
     return m;
   });
-  // Update mergeCells count
+  // Update mergeCells count (or remove the entire element if all merges were stripped)
   const mc=(wsXml.match(/<mergeCell\b/g)||[]).length;
-  wsXml=wsXml.replace(/(<mergeCells\s+count=")(\d+)(")/,`$1${mc}$3`);
+  if(mc===0){
+    wsXml=wsXml.replace(/<mergeCells\b[^>]*>[\s\S]*?<\/mergeCells>/g,'');
+    wsXml=wsXml.replace(/<mergeCells\b[^>]*\/>/g,'');
+  } else {
+    wsXml=wsXml.replace(/(<mergeCells\s+count=")(\d+)(")/,`$1${mc}$3`);
+  }
   // Shrink dimension
   wsXml=wsXml.replace(/(<dimension\s+ref="[A-Z]+\d+:)([A-Z]+)\d+(")/,`$1$2${maxRow}$3`);
   return wsXml;
@@ -2461,24 +2471,40 @@ async function _mergeWorkbookWithSticker(invBuf,stickerBuf){
     // Convert sticker shared-string cells → inline strings
     // (sticker has its own sharedStrings which won't exist in the merged workbook)
     const ssFile=stkZip.file('xl/sharedStrings.xml');
+    const strings=[];
     if(ssFile){
       const ssXml=await ssFile.async('string');
-      const strings=[];
       for(const m of ssXml.matchAll(/<si>([\s\S]*?)<\/si>/g)){
         strings.push([...m[1].matchAll(/<t(?:[^>]*)?>([^<]*)<\/t>/g)].map(t=>t[1]).join(''));
       }
-      // Match <c ...><v>INDEX</v></c> OR <c ...><f>...</f><v>INDEX</v></c> where t="s" is in attributes
-      // The second form covers formula cells whose cached result is a shared string — these must also
-      // be converted to inline strings, otherwise the stale sticker indices corrupt the merged workbook.
+      // Pass 1: standard form — <c ...><v>N</v></c> or <c ...><f>...</f><v>N</v></c> with t="s"
       stkWsXml=stkWsXml.replace(/<c(\s[^>]*)>(?:<f(?:[^>]*)>[\s\S]*?<\/f>)?<v>(\d+)<\/v><\/c>/g,(m,attrs,idx)=>{
         if(!attrs.includes('t="s"'))return m;
-        // Get raw string (already XML-escaped in sharedStrings)
         const raw=strings[+idx]||'';
-        // Strip s= attribute and t= attribute, then rebuild as inlineStr (drop formula — value is baked in)
         const sAttr=(attrs.match(/\bs="(\d+)"/))?.[0]||'';
         const rAttr=(attrs.match(/\br="[^"]*"/))?.[0]||'';
         return `<c ${rAttr}${sAttr?' '+sAttr:''} t="inlineStr"><is><t>${raw}</t></is></c>`;
       });
+      // Pass 2: catch-all for ANY remaining t="s" open-close cells (xml:space on <v>, whitespace, etc.)
+      stkWsXml=stkWsXml.replace(/<c\b([^>]*)\bt="s"\b([^>]*)>([\s\S]*?)<\/c>/g,(m,pre,post,content)=>{
+        const vM=content.match(/<v[^>]*>(\d+)<\/v>/);
+        const raw=vM?(strings[+vM[1]]||''):'';
+        const attrs=pre+post;
+        const sAttr=(attrs.match(/\bs="[^"]*"/))?.[0]||'';
+        const rAttr=(attrs.match(/\br="[^"]*"/))?.[0]||'';
+        return `<c ${rAttr}${sAttr?' '+sAttr:''} t="inlineStr"><is><t>${raw}</t></is></c>`;
+      });
+      // Pass 3: self-closing t="s" cells (empty shared-string references)
+      stkWsXml=stkWsXml.replace(/<c\b([^>]*)\bt="s"\b([^>]*)\/>/g,(m,pre,post)=>{
+        const attrs=pre+post;
+        const sAttr=(attrs.match(/\bs="[^"]*"/))?.[0]||'';
+        const rAttr=(attrs.match(/\br="[^"]*"/))?.[0]||'';
+        return `<c ${rAttr}${sAttr?' '+sAttr:''} t="inlineStr"><is><t></t></is></c>`;
+      });
+      // Diagnostic: warn if any t="s" cells remain (would be invalid in merged workbook)
+      const leftover=(stkWsXml.match(/\bt="s"/g)||[]).length;
+      if(leftover>0)console.warn('[merge] WARNING: '+leftover+' t="s" cells remain after conversion — invalid shared-string refs!');
+      else console.log('[merge] all t="s" cells converted to inlineStr. strings.length='+strings.length);
     }
 
     // ── style merge ───────────────────────────────────────────────────────────
@@ -2604,7 +2630,16 @@ async function _mergeWorkbookWithSticker(invBuf,stickerBuf){
     stkWsXml=stkWsXml.replace(/<picture\s[^>]*\/>/g,'');
 
     // Remap all s="N" cell-style references in sticker worksheet
-    stkWsXml=stkWsXml.replace(/\bs="(\d+)"/g,(_,n)=>`s="${+n+invXfN}"`);
+    const totalMergedXfs=invXfN+stkXfsRaw.length;
+    stkWsXml=stkWsXml.replace(/\bs="(\d+)"/g,(_,n)=>{
+      const remapped=+n+invXfN;
+      if(remapped>=totalMergedXfs){
+        console.warn('[merge] s="'+n+'" remapped to '+remapped+' but totalXfs='+totalMergedXfs+' — clamping to 0');
+        return 's="0"';
+      }
+      return `s="${remapped}"`;
+    });
+    console.log('[merge] style remap done. invXfN='+invXfN+' stkXfs='+stkXfsRaw.length+' total='+totalMergedXfs);
 
     // ── add sticker sheet to invoice workbook ─────────────────────────────────
     const invWbXml=await invZip.file('xl/workbook.xml').async('string');
