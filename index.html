@@ -2386,17 +2386,30 @@ async function ensureBlocks(rawBuf,sheetName,neededBlocks,blockSize){
     const blockStartOff=firstHulRow-1; // 1 for BANGALORE, 0 for all others
     // Extend if template doesn't have enough blocks
     wsXml=extendSheetXml(wsXml,neededBlocks,blockSize,firstHulRow);
-    // Pre-trim: remove all rows beyond the last used row so ExcelJS loads a clean
-    // template with exactly the right number of blocks.
-    // For BANGALORE the last block ends at neededBlocks*blockSize+blockStartOff
-    wsXml=_trimXmlRows(wsXml, neededBlocks*blockSize+blockStartOff);
+    // For BANGALORE the DC sticker template has VARIABLE block sizes (some 23 rows,
+    // some 24 rows). Formula-based trimming cuts the wrong row boundaries.
+    // Instead, scan for actual HUL row positions (column A, shared-string index 0)
+    // and use them for both the trim boundary and cell-clearing row calculations.
+    const hulPos=[];
+    if(blockStartOff>0){
+      for(const hm of wsXml.matchAll(/<c r="A(\d+)"[^>]*t="s"[^>]*><v>0<\/v><\/c>/g))
+        hulPos.push(+hm[1]);
+    }
+    // Pre-trim: remove rows beyond the last needed block.
+    // BANGALORE: use row just before next HUL as the boundary (accounts for variable sizes).
+    // Others: use formula neededBlocks*blockSize (uniform 23-row blocks).
+    const trimRow=(blockStartOff>0&&hulPos.length>neededBlocks)
+      ?hulPos[neededBlocks]-1
+      :neededBlocks*blockSize+blockStartOff;
+    wsXml=_trimXmlRows(wsXml,trimRow);
     // Clear stale info-field cells (col E, offsets 3-6 and 13 per block) from XML
     // before ExcelJS loads. Template may store these as inline strings which ExcelJS
     // cannot overwrite — stripping here ensures the new values write cleanly.
-    // Row = blockStartOff + b*blockSize + off  (accounts for BANGALORE's row-1 blank)
+    // BANGALORE: use actual HUL position for each block (hulPos[b]+off-1).
+    // Others: use formula blockStartOff+b*blockSize+off.
     for(let b=0;b<neededBlocks;b++){
       for(const off of [3,4,5,6,13]){
-        const row=blockStartOff+b*blockSize+off;
+        const row=hulPos.length>b?(hulPos[b]+off-1):(blockStartOff+b*blockSize+off);
         wsXml=wsXml.replace(
           new RegExp(`<c\\b([^>]*)\\br="E${row}"([^>]*)>[\\s\\S]*?<\\/c>`,'g'),
           (m)=>{const s=(m.match(/\bs="([^"]*)"/)||[])[1];return s?`<c r="E${row}" s="${s}"></c>`:`<c r="E${row}"></c>`;}
