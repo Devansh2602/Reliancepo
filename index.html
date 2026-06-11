@@ -2704,16 +2704,12 @@ async function _fixMergedWb(buf){
     const wsCT='application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml';
     for(const wsF of Object.keys(zip.files).filter(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p))){
       const pn='/'+wsF;
-      if(ct.includes(`PartName="${pn}"`))continue;  // already present (any type)
+      if(ct.includes(pn))continue;  // already present
       ct=ct.replace('</Types>',`<Override PartName="${pn}" ContentType="${wsCT}"/></Types>`);
     }
-    // Strip any Override entries that reference files that no longer exist in the ZIP
-    ct=ct.replace(/<Override\s+PartName="([^"]+)"[^>]*\/?>/g,(m,pn)=>{
-      const f=pn.startsWith('/')?pn.slice(1):pn;
-      return zip.file(f)?m:'';
-    });
     zip.file('[Content_Types].xml',ct);
-    console.log('[fixMergedWb] Content_Types updated');
+    console.log('[fixMergedWb] Content_Types updated. sheets in zip='+
+      Object.keys(zip.files).filter(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p)).join(','));
     // 2. Read current workbook XML and rels
     const wbXml=await zip.file('xl/workbook.xml').async('string');
     let wbRels=await zip.file('xl/_rels/workbook.xml.rels').async('string');
@@ -2757,38 +2753,19 @@ async function _fixMergedWb(buf){
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`+
       `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`+
       rBody+`</Relationships>`);
-    // 7. Clean sheetViews + strip pageSetup r:id in all worksheets
+    // 7. Clean sheetViews + strip pageSetup r:id + strip dangling r:id elements in all worksheets
     const wsFs=Object.keys(zip.files).filter(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p));
     for(const wf of wsFs){
       let wsXml=await zip.file(wf).async('string');
       wsXml=wsXml.replace(/(<pageSetup\b[^>]*?)\s+r:id="[^"]*"/g,'$1');
       wsXml=wsXml.replace(/<sheetViews>[\s\S]*?<\/sheetViews>/,
         '<sheetViews><sheetView workbookViewId="0"><selection activeCell="A1" sqref="A1"/></sheetView></sheetViews>');
-      // Strip r:id-referencing elements that require a worksheet .rels file
+      // Strip elements that reference worksheet rels (drawings etc.) which may not exist in merged workbook
       wsXml=wsXml.replace(/<drawing\s[^>]*\/>/g,'');
       wsXml=wsXml.replace(/<legacyDrawing\s[^>]*\/>/g,'');
       wsXml=wsXml.replace(/<tablePart\s[^>]*\/>/g,'');
       wsXml=wsXml.replace(/<picture\s[^>]*\/>/g,'');
-      wsXml=wsXml.replace(/<oleObjects\b[\s\S]*?<\/oleObjects>/g,'');
-      wsXml=wsXml.replace(/<controls\b[\s\S]*?<\/controls>/g,'');
       zip.file(wf,wsXml);
-      // Clean the worksheet's own rels file — remove any Relationships whose Target file
-      // doesn't exist in the ZIP (avoids "missing part" errors for dropped drawings etc.)
-      const wfRelsPath=wf.replace(/^xl\/worksheets\//,'xl/worksheets/_rels/').replace(/\.xml$/,'.xml.rels');
-      const wfRels=zip.file(wfRelsPath);
-      if(wfRels){
-        let rXml=await wfRels.async('string');
-        rXml=rXml.replace(/<Relationship\b[^>]*>/g,(rel)=>{
-          const tm=rel.match(/\bTarget="([^"]+)"/);
-          if(!tm)return rel;
-          const t=tm[1];
-          // Resolve relative target against xl/worksheets/
-          const target=t.startsWith('/')?t.slice(1):('xl/worksheets/'+t).replace(/\/[^/]+\/\.\.\//g,'/');
-          return zip.file(target)?rel:'';
-        });
-        if(/<Relationship\b/.test(rXml)){zip.file(wfRelsPath,rXml);}
-        else{zip.remove(wfRelsPath);}
-      }
     }
     return zip.generateAsync({type:'arraybuffer'});
   }catch(e){console.warn('_fixMergedWb failed:',e);return buf;}
