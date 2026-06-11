@@ -2677,9 +2677,9 @@ async function _fixMergedWb(buf){
     if(zip.file('xl/calcChain.xml'))zip.remove('xl/calcChain.xml');
     let ct=await zip.file('[Content_Types].xml').async('string');
     ct=ct.replace(/<Override[^>]+calcChain\.xml[^>]*\/?>/g,'');
-    // Ensure all required OOXML parts have their correct content-type overrides.
-    // Invoice templates have no sharedStrings so Content_Types never declares it;
-    // ExcelJS always outputs sharedStrings.xml — missing declaration = corruption.
+    // Ensure all required OOXML parts have their CORRECT content-type overrides.
+    // Check for correct content type (not just path presence) — ExcelJS can write a wrong
+    // generic Override that we need to replace, and missing declarations = corruption.
     const ctParts=[
       {file:'xl/sharedStrings.xml',
        ct:'application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml',
@@ -2692,20 +2692,28 @@ async function _fixMergedWb(buf){
        path:'/xl/theme/theme1.xml'},
     ];
     for(const p of ctParts){
-      if(zip.file(p.file)&&!ct.includes(p.path)){
-        ct=ct.replace('</Types>',
-          `<Override PartName="${p.path}" ContentType="${p.ct}"/></Types>`);
-      }
+      if(!zip.file(p.file))continue;
+      // Check if a correct Override already exists
+      if(ct.includes(`ContentType="${p.ct}"`))continue;
+      // Remove any existing (possibly wrong) Override for this path, then add correct one
+      const escapedPath=p.path.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+      ct=ct.replace(new RegExp(`<Override[^>]+PartName="${escapedPath}"[^>]*\\/?>`),'');
+      ct=ct.replace('</Types>',`<Override PartName="${p.path}" ContentType="${p.ct}"/></Types>`);
     }
-    // Also ensure every worksheet that exists has a content-type entry
+    // Ensure every worksheet file has its correct content-type Override
+    const wsCT='application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml';
     for(const wsF of Object.keys(zip.files).filter(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p))){
       const pn='/'+wsF;
-      if(!ct.includes(pn)){
-        ct=ct.replace('</Types>',
-          `<Override PartName="${pn}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`);
-      }
+      if(ct.includes(`PartName="${pn}"`))continue;  // already present (any type)
+      ct=ct.replace('</Types>',`<Override PartName="${pn}" ContentType="${wsCT}"/></Types>`);
     }
+    // Strip any Override entries that reference files that no longer exist in the ZIP
+    ct=ct.replace(/<Override\s+PartName="([^"]+)"[^>]*\/?>/g,(m,pn)=>{
+      const f=pn.startsWith('/')?pn.slice(1):pn;
+      return zip.file(f)?m:'';
+    });
     zip.file('[Content_Types].xml',ct);
+    console.log('[fixMergedWb] Content_Types updated');
     // 2. Read current workbook XML and rels
     const wbXml=await zip.file('xl/workbook.xml').async('string');
     let wbRels=await zip.file('xl/_rels/workbook.xml.rels').async('string');
@@ -2725,6 +2733,7 @@ async function _fixMergedWb(buf){
     const hasStyles=!!zip.file('xl/styles.xml');
     const hasSS=!!zip.file('xl/sharedStrings.xml');
     const hasTheme=!!zip.file('xl/theme/theme1.xml');
+    console.log('[fixMergedWb] sheets='+sheets.map(s=>s.name).join('|')+' styles='+hasStyles+' ss='+hasSS+' theme='+hasTheme);
     // 5. Rebuild minimal workbook.xml — no workbookProtection, definedNames, calcPr
     const sheetsXml=sheets.map(s=>`<sheet name="${s.name}" sheetId="${s.sheetId}" r:id="${s.rid}"/>`).join('');
     zip.file('xl/workbook.xml',
@@ -2755,7 +2764,31 @@ async function _fixMergedWb(buf){
       wsXml=wsXml.replace(/(<pageSetup\b[^>]*?)\s+r:id="[^"]*"/g,'$1');
       wsXml=wsXml.replace(/<sheetViews>[\s\S]*?<\/sheetViews>/,
         '<sheetViews><sheetView workbookViewId="0"><selection activeCell="A1" sqref="A1"/></sheetView></sheetViews>');
+      // Strip r:id-referencing elements that require a worksheet .rels file
+      wsXml=wsXml.replace(/<drawing\s[^>]*\/>/g,'');
+      wsXml=wsXml.replace(/<legacyDrawing\s[^>]*\/>/g,'');
+      wsXml=wsXml.replace(/<tablePart\s[^>]*\/>/g,'');
+      wsXml=wsXml.replace(/<picture\s[^>]*\/>/g,'');
+      wsXml=wsXml.replace(/<oleObjects\b[\s\S]*?<\/oleObjects>/g,'');
+      wsXml=wsXml.replace(/<controls\b[\s\S]*?<\/controls>/g,'');
       zip.file(wf,wsXml);
+      // Clean the worksheet's own rels file — remove any Relationships whose Target file
+      // doesn't exist in the ZIP (avoids "missing part" errors for dropped drawings etc.)
+      const wfRelsPath=wf.replace(/^xl\/worksheets\//,'xl/worksheets/_rels/').replace(/\.xml$/,'.xml.rels');
+      const wfRels=zip.file(wfRelsPath);
+      if(wfRels){
+        let rXml=await wfRels.async('string');
+        rXml=rXml.replace(/<Relationship\b[^>]*>/g,(rel)=>{
+          const tm=rel.match(/\bTarget="([^"]+)"/);
+          if(!tm)return rel;
+          const t=tm[1];
+          // Resolve relative target against xl/worksheets/
+          const target=t.startsWith('/')?t.slice(1):('xl/worksheets/'+t).replace(/\/[^/]+\/\.\.\//g,'/');
+          return zip.file(target)?rel:'';
+        });
+        if(/<Relationship\b/.test(rXml)){zip.file(wfRelsPath,rXml);}
+        else{zip.remove(wfRelsPath);}
+      }
     }
     return zip.generateAsync({type:'arraybuffer'});
   }catch(e){console.warn('_fixMergedWb failed:',e);return buf;}
