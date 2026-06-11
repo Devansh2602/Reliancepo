@@ -2563,8 +2563,74 @@ async function _mergeWorkbookWithSticker(invBuf,stickerBuf){
       invZip.file('[Content_Types].xml',ct.replace('</Types>',
         `<Override PartName="/xl/worksheets/${newFile}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`));
 
-    return invZip.generateAsync({type:'arraybuffer'});
+    const rawMerged=await invZip.generateAsync({type:'arraybuffer'});
+    return await _fixMergedWb(rawMerged);
   }catch(e){console.warn('_mergeWorkbookWithSticker failed:',e);return invBuf;}
+}
+
+// Final cleanup for merged 3-sheet workbook: strip ExcelJS artifacts from workbook XML
+// (workbookProtection, definedNames, calcPr, theme refs) and rebuild minimally.
+// This eliminates the "We found a problem with some content" Excel error on BANGALORE DC packs.
+async function _fixMergedWb(buf){
+  if(typeof JSZip==='undefined')return buf;
+  try{
+    const zip=await JSZip.loadAsync(buf);
+    // 1. Remove calcChain
+    if(zip.file('xl/calcChain.xml'))zip.remove('xl/calcChain.xml');
+    let ct=await zip.file('[Content_Types].xml').async('string');
+    ct=ct.replace(/<Override[^>]+calcChain\.xml[^>]*\/?>/g,'');
+    zip.file('[Content_Types].xml',ct);
+    // 2. Read current workbook XML and rels
+    const wbXml=await zip.file('xl/workbook.xml').async('string');
+    let wbRels=await zip.file('xl/_rels/workbook.xml.rels').async('string');
+    wbRels=wbRels.replace(/<Relationship[^>]+calcChain\.xml[^>]*\/?>/g,'');
+    // 3. Extract sheet entries from workbook.xml
+    const sheets=[];
+    for(const m of wbXml.matchAll(/<sheet\b[^>]*>/g)){
+      const nm=(m[0].match(/\bname="([^"]*)"/))||[,''];
+      const sid=(m[0].match(/\bsheetId="([^"]*)"/))||[,''];
+      const rid=(m[0].match(/\br:id="([^"]*)"/))||[,''];
+      if(rid[1])sheets.push({name:nm[1],sheetId:sid[1],rid:rid[1]});
+    }
+    // 4. Map rels rId → Target
+    const relsMap={};
+    for(const m of wbRels.matchAll(/Id="([^"]+)"[^>]+Target="([^"]+)"/g))
+      relsMap[m[1]]=m[2];
+    const hasStyles=!!zip.file('xl/styles.xml');
+    const hasSS=!!zip.file('xl/sharedStrings.xml');
+    // 5. Rebuild minimal workbook.xml — no workbookProtection, definedNames, calcPr
+    const sheetsXml=sheets.map(s=>`<sheet name="${s.name}" sheetId="${s.sheetId}" r:id="${s.rid}"/>`).join('');
+    zip.file('xl/workbook.xml',
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`+
+      `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"`+
+      ` xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">`+
+      `<bookViews><workbookView xWindow="0" yWindow="0" windowWidth="14400" windowHeight="8400"/></bookViews>`+
+      `<sheets>${sheetsXml}</sheets>`+
+      `</workbook>`);
+    // 6. Rebuild minimal workbook.xml.rels — only sheets + styles + sharedStrings
+    const allNums=[...wbRels.matchAll(/Id="rId(\d+)"/g)].map(m=>+m[1]);
+    let nxt=Math.max(0,...allNums)+1;
+    let rBody=sheets.map(s=>{
+      const t=relsMap[s.rid]||`worksheets/sheet${s.sheetId}.xml`;
+      return `<Relationship Id="${s.rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="${t}"/>`;
+    }).join('');
+    if(hasStyles) rBody+=`<Relationship Id="rId${nxt++}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>`;
+    if(hasSS) rBody+=`<Relationship Id="rId${nxt++}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>`;
+    zip.file('xl/_rels/workbook.xml.rels',
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`+
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`+
+      rBody+`</Relationships>`);
+    // 7. Clean sheetViews + strip pageSetup r:id in all worksheets
+    const wsFs=Object.keys(zip.files).filter(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p));
+    for(const wf of wsFs){
+      let wsXml=await zip.file(wf).async('string');
+      wsXml=wsXml.replace(/(<pageSetup\b[^>]*?)\s+r:id="[^"]*"/g,'$1');
+      wsXml=wsXml.replace(/<sheetViews>[\s\S]*?<\/sheetViews>/,
+        '<sheetViews><sheetView workbookViewId="0"><selection activeCell="A1" sqref="A1"/></sheetView></sheetViews>');
+      zip.file(wf,wsXml);
+    }
+    return zip.generateAsync({type:'arraybuffer'});
+  }catch(e){console.warn('_fixMergedWb failed:',e);return buf;}
 }
 
 // Build sticker buffer (same pipeline as genCtnSticker but returns buffer, no download)
