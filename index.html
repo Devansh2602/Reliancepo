@@ -2553,12 +2553,20 @@ async function _buildStickerBuffer(params){
   ws.views=[{state:'normal',showGridLines:false}];
   wb.worksheets.forEach(s=>{if(s!==ws)s.views=[{state:'normal'}];});
   const allHUL=[];
+  // ExcelJS may return inlineStr cells as RichText objects — normalise to plain string
+  const _cellText=v=>typeof v==='string'?v:(v?.richText?v.richText.map(r=>r.text||'').join(''):String(v||''));
   ws.eachRow({includeEmpty:false},(row,rn)=>{
-    row.eachCell({includeEmpty:false},cell=>{if(cell.value==='HANDLING UNIT LABEL')allHUL.push(rn);});
+    row.eachCell({includeEmpty:false},cell=>{if(_cellText(cell.value)==='HANDLING UNIT LABEL')allHUL.push(rn);});
   });
   let blockStarts=allHUL.filter((rn,i)=>i===allHUL.length-1||allHUL[i+1]-rn>2);
   console.log('[sticker] allHUL='+allHUL.length+' blockStarts='+blockStarts.length);
-  if(!blockStarts.length){console.warn('[sticker] no HUL rows found — sticker aborted');return null;}
+  if(!blockStarts.length){
+    // Fallback: could not find HANDLING UNIT LABEL via scan (happens when inlineStr
+    // cells are read back as RichText by ExcelJS). Use row 1 as first block start
+    // and rebuild positions mathematically — same formula as the extend path below.
+    console.warn('[sticker] HUL scan found nothing — falling back to row-1 origin');
+    blockStarts=[1];
+  }
   if(blockStarts.length<cartons.length){
     const origin=blockStarts[0];blockStarts=[];
     for(let i=0;i<cartons.length;i++)blockStarts.push(origin+i*blockSize);
@@ -2620,21 +2628,20 @@ async function genCtnSticker(){
     ws.views=[{state:'normal',showGridLines:false}];
     wb.worksheets.forEach(s=>{ if(s!==ws) s.views=[{state:'normal'}]; });
 
-    // Scan block-start rows
+    // Scan block-start rows — normalise cell value to plain string (ExcelJS may return RichText)
+    const _ct=v=>typeof v==='string'?v:(v?.richText?v.richText.map(r=>r.text||'').join(''):String(v||''));
     const allHUL=[];
     ws.eachRow({includeEmpty:false},(row,rn)=>{
       row.eachCell({includeEmpty:false},cell=>{
-        if(cell.value==='HANDLING UNIT LABEL')allHUL.push(rn);
+        if(_ct(cell.value)==='HANDLING UNIT LABEL')allHUL.push(rn);
       });
     });
     const blockStarts=allHUL.filter((rn,i)=>i===allHUL.length-1||allHUL[i+1]-rn>2);
 
-    if(!blockStarts.length){toast('Could not find HANDLING UNIT LABEL blocks in template.');return;}
+    // Fallback: if scan found nothing (RichText issue), start from row 1
+    if(!blockStarts.length) blockStarts.push(1);
 
-    // If ExcelJS scan found fewer blocks than needed (happens when extendSheetXml added rows
-    // at high row numbers that ExcelJS doesn't enumerate), rebuild positions mathematically.
-    // blockStarts[i] is the HUL heading row; actual block data starts at blockStarts[i]-1.
-    // Consecutive blocks are exactly blockSize rows apart.
+    // If ExcelJS scan found fewer blocks than needed, rebuild positions mathematically.
     if(blockStarts.length<cartons.length){
       const origin=blockStarts[0];
       blockStarts.length=0;
