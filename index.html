@@ -2270,12 +2270,25 @@ async function cleanTemplateZip(rawBuf){
       wsXml=wsXml.replace(/<sheetViews>[\s\S]*?<\/sheetViews>/,
         '<sheetViews><sheetView workbookViewId="0"><selection activeCell="A1" sqref="A1"/></sheetView></sheetViews>');
 
-      // Expand shared formulas so ExcelJS doesn't throw "master must exist" errors
-      wsXml=wsXml.replace(/<f\b([^>]*)\bt="shared"\b([^>]*)>([\s\S]*?)<\/f>/g,(_,_a,_b,f)=>`<f>${f}</f>`);
-      wsXml=wsXml.replace(/<f\b[^>]*\bt="shared"\b[^>]*\/>/g,'');
+      // ── Convert t="str" formula-result cells to inlineStr FIRST ──────────────
+      // t="str" means the cell has a formula whose cached result is a plain string stored in <v>.
+      // Strip the formula, keep the cached value as inlineStr so ExcelJS never sees any formula.
+      wsXml=wsXml.replace(/<c\b([^>]*)\bt="str"\b([^>]*)>([\s\S]*?)<\/c>/g,(m,pre,post,inner)=>{
+        const vM=inner.match(/<v[^>]*>([^<]*)<\/v>/);
+        const raw=vM?vM[1]:'';
+        const esc=raw.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        const all=pre+post;
+        const sA=(all.match(/\bs="[^"]*"/))||[''];
+        const rA=(all.match(/\br="[^"]*"/))||[''];
+        return `<c ${rA[0]}${sA[0]?' '+sA[0]:''} t="inlineStr"><is><t>${esc}</t></is></c>`;
+      });
 
-      // Convert ALL t="s" cells to inlineStr using the shared strings we read above.
-      // Covers open-close form: <c ... t="s"><v>N</v></c>
+      // ── Strip ALL remaining formulas (shared or regular), keeping cached <v> ─
+      // After this, the template is pure static data — no formula processing by ExcelJS.
+      wsXml=wsXml.replace(/<f\b[^>]*>[\s\S]*?<\/f>/g,'');
+      wsXml=wsXml.replace(/<f\b[^>]*\/>/g,'');
+
+      // ── Convert ALL t="s" cells to inlineStr using the shared strings table ──
       wsXml=wsXml.replace(/<c\b([^>]*)\bt="s"\b([^>]*)>([\s\S]*?)<\/c>/g,(m,pre,post,inner)=>{
         const vM=inner.match(/<v[^>]*>(\d+)<\/v>/);
         const raw=vM?(strings[+vM[1]]||''):'';
