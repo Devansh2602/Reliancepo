@@ -2279,6 +2279,13 @@ async function cleanTemplateZip(rawBuf){
       wsXml=wsXml.replace(/<sheetViews>[\s\S]*?<\/sheetViews>/,
         '<sheetViews><sheetView workbookViewId="0"><selection activeCell="A1" sqref="A1"/></sheetView></sheetViews>');
 
+      // Expand shared formulas — ExcelJS throws "master must exist above/left of clone"
+      // when a clone cell appears before its master in processing order.
+      // Fix: convert master shared formulas to plain formulas; drop clone <f> refs
+      // (clone cells keep their cached <v> values, which is fine for a display template).
+      wsXml=wsXml.replace(/<f\b([^>]*)\bt="shared"\b([^>]*)>([\s\S]*?)<\/f>/g,(_,_pre,_post,formula)=>`<f>${formula}</f>`);
+      wsXml=wsXml.replace(/<f\b[^>]*\bt="shared"\b[^>]*\/>/g,'');
+
       zip.file(wf,wsXml);
 
       // Clean the sheet's own _rels file
