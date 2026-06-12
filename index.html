@@ -2106,87 +2106,6 @@ function trimWsRows(ws,firstUnused){
   }
 }
 
-// helper: apply alignment + font to a cell without touching borders
-// (template already has correct medium-weight distributed borders;
-//  overriding them with thin borders creates "half-border" artifacts)
-function _stickerStyle(cell,halign,bold,fontSize){
-  cell.alignment={horizontal:halign||'left',vertical:'middle',wrapText:false};
-  if(bold!==undefined||fontSize!==undefined){
-    const f=cell.font||{};
-    cell.font=Object.assign({},f,{bold:!!bold,size:fontSize||f.size||14,name:f.name||'Arial'});
-  }
-}
-
-function fillDCStickerBlock(ws,bs,ctn,totalCtns,invStr,poNum,styleName,pkgDate,dcCode){
-  const c=(off,col)=>ws.getCell(bs+off,col);
-  // Force-clear before writing so stale template placeholders don't persist
-  [c(3,5),c(4,5),c(5,5),c(6,5),c(10,1),
-   c(11,5),c(12,5),c(13,5),c(14,5),c(16,5),c(17,5)].forEach(cell=>{cell.value=null;});
-  // text fields — left align, size 14
-  const tf=[c(3,5),c(4,5),c(5,5),c(6,5)];
-  c(3,5).value=`Invoice No:- ${invStr}`;
-  c(4,5).value=`Po Number :- ${poNum}`;
-  c(5,5).value=`Style:- ${styleName}`;
-  c(6,5).value=`Po Type :- DC`;
-  // Explicitly set weight/qty labels so ExcelJS registers them (prevents shared-string index scramble)
-  c(11,5).value='Net Weight : ';
-  c(12,5).value='Gross Weight :';
-  c(13,5).value='Total Qty  :  ';
-  // Pkg Date lives at E14 in the template (not E13); write combined label+value
-  c(14,5).value=`Pkg Date : ${pkgDate}`;
-  // "To:" address — replace raw DC code with proper DC name from DC_INFO
-  const _dci=DC_INFO[dcCode]||{};
-  c(10,1).value=`To: ${_dci.l1||'Reliance Retail Limited'}`;
-  _stickerStyle(c(10,1),'left',true,11);
-  tf.forEach(cell=>_stickerStyle(cell,'left',false,14));
-  [c(11,5),c(12,5),c(13,5),c(14,5)].forEach(cell=>_stickerStyle(cell,'left',false,14));
-  // carton number at E17 — center, bold, size 14
-  c(17,5).value=`${String(ctn.ctnNo).padStart(2,'0')} OF ${totalCtns}`;
-  _stickerStyle(c(17,5),'center',true,14);
-  // data row — center, size 14
-  c(20,1).value=ctn.artEan;  c(20,3).value=ctn.colour;
-  c(20,5).value=ctn.size;    c(20,7).value=ctn.qty;
-  [c(20,1),c(20,3),c(20,5),c(20,7)].forEach(cell=>_stickerStyle(cell,'center',false,14));
-}
-
-function fillRPStickerBlock(ws,bs,ctn,totalCtns,invStr,poNum,styleName,pkgDate,dcCode){
-  const c=(off,col)=>ws.getCell(bs+off,col);
-  // Force-clear before writing so stale template placeholders don't persist
-  [c(3,5),c(4,5),c(5,5),c(6,5),c(10,1),
-   c(11,5),c(12,5),c(13,5),c(14,5),c(16,5),c(17,5)].forEach(cell=>{cell.value=null;});
-  // text fields — left align, size 11
-  const tf=[c(3,5),c(4,5),c(5,5),c(6,5)];
-  c(3,5).value=`Invoice No:- ${invStr}`;
-  c(4,5).value=`Po Number :- ${poNum}`;
-  c(5,5).value=`Style:- ${styleName}`;
-  c(6,5).value=`Po Type :- RP`;
-  // Explicitly set weight/qty labels so ExcelJS registers them (prevents shared-string index scramble)
-  c(11,5).value='Net Weight: ';
-  c(12,5).value='Gross Weight :';
-  c(13,5).value='Total Qty : ';
-  // Pkg Date lives at E14 in the template (not E13); write combined label+value
-  c(14,5).value=`Pkg Date :  ${pkgDate}`;
-  // "To:" address — replace raw DC code with proper DC name from DC_INFO
-  const _dci=DC_INFO[dcCode]||{};
-  c(10,1).value=`To: ${_dci.l1||'Reliance Retail Limited'}`;
-  _stickerStyle(c(10,1),'left',true,11);
-  tf.forEach(cell=>_stickerStyle(cell,'left',false,11));
-  [c(11,5),c(12,5),c(13,5),c(14,5)].forEach(cell=>_stickerStyle(cell,'left',false,11));
-  // carton number at E17 — center, bold, size 18
-  c(17,5).value=`${String(ctn.ctnNo).padStart(2,'0')} OF ${totalCtns}`;
-  _stickerStyle(c(17,5),'center',true,18);
-  // pack header — center, bold, size 11
-  c(20,1).value=ctn.packEan; c(20,3).value=ctn.colour; c(20,7).value=ctn.packs;
-  [c(20,1),c(20,3),c(20,7)].forEach(cell=>_stickerStyle(cell,'center',true,11));
-  // size rows — center, size 11
-  ['S','M','L','XL','XXL'].forEach((sz,i)=>{
-    c(21+i,1).value=ctn.perSizeEans[sz];
-    c(21+i,3).value=ctn.colour;
-    c(21+i,7).value=ctn.sizeQtys[sz];
-    [c(21+i,1),c(21+i,3),c(21+i,7)].forEach(cell=>_stickerStyle(cell,'center',false,11));
-  });
-}
-
 // Extend a worksheet's XML so it has at least neededBlocks sticker blocks.
 // Clones the FIRST block's rows/merges with shifted row numbers — no fixed cap.
 function extendSheetXml(xmlStr,neededBlocks,blockSize,firstHulRow){
@@ -2530,160 +2449,151 @@ async function ensureBlocks(rawBuf,sheetName,neededBlocks,blockSize){
   }catch(e){console.warn('ensureBlocks failed:',e);return rawBuf;}
 }
 
-// Build sticker buffer (same pipeline as genCtnSticker but returns buffer, no download)
+// Set a cell in worksheet XML to an inlineStr value, preserving its style attribute.
+// Works after cleanTemplateZip (all string cells already inlineStr, no shared strings).
+function _xmlSetInlineStr(wsXml,ref,value){
+  const esc=String(value==null?'':value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  // Match existing cell (full element or self-closing)
+  const cRe=new RegExp(`<c\\b([^>]*)\\br="${ref}"([^>]*)(?:/>|>[\\s\\S]*?</c>)`);
+  const m=wsXml.match(cRe);
+  if(m){
+    const attrs=(m[1]||'')+(m[2]||'');
+    const sM=attrs.match(/\bs="([^"]*)"/);
+    const sAttr=sM?` s="${sM[1]}"`:'';
+    return wsXml.replace(cRe,`<c r="${ref}"${sAttr} t="inlineStr"><is><t>${esc}</t></is></c>`);
+  }
+  // Insert into existing row
+  const rowNum=ref.match(/\d+$/)[0];
+  const rRe=new RegExp(`(<row\\b[^>]*\\br="${rowNum}"\\b[^>]*>)([\\s\\S]*?)(</row>)`);
+  const rM=wsXml.match(rRe);
+  const newCell=`<c r="${ref}" t="inlineStr"><is><t>${esc}</t></is></c>`;
+  if(rM)return wsXml.replace(rRe,rM[1]+rM[2]+newCell+rM[3]);
+  return wsXml.replace('</sheetData>',`<row r="${rowNum}">${newCell}</row></sheetData>`);
+}
+
+// Fill one RP sticker block directly in worksheet XML (no ExcelJS).
+// bs = blockStart - 1 (0-based row offset; row = bs + offset).
+function _xmlFillRPBlock(wsXml,bs,ctn,totalCtns,invStr,poNum,styleName,pkgDate,dcCode){
+  const r=(off,col)=>`${String.fromCharCode(64+col)}${bs+off}`;
+  const s=_xmlSetInlineStr;
+  const _dci=DC_INFO[dcCode]||{};
+  wsXml=s(wsXml,r(3,5),`Invoice No:- ${invStr}`);
+  wsXml=s(wsXml,r(4,5),`Po Number :- ${poNum}`);
+  wsXml=s(wsXml,r(5,5),`Style:- ${styleName}`);
+  wsXml=s(wsXml,r(6,5),'Po Type :- RP');
+  wsXml=s(wsXml,r(10,1),`To: ${_dci.l1||'Reliance Retail Limited'}`);
+  wsXml=s(wsXml,r(11,5),'Net Weight: ');
+  wsXml=s(wsXml,r(12,5),'Gross Weight :');
+  wsXml=s(wsXml,r(13,5),'Total Qty : ');
+  wsXml=s(wsXml,r(14,5),`Pkg Date :  ${pkgDate}`);
+  wsXml=s(wsXml,r(17,5),`${String(ctn.ctnNo).padStart(2,'0')} OF ${totalCtns}`);
+  wsXml=s(wsXml,r(20,1),ctn.packEan);
+  wsXml=s(wsXml,r(20,3),ctn.colour);
+  wsXml=s(wsXml,r(20,7),String(ctn.packs));
+  ['S','M','L','XL','XXL'].forEach((sz,i)=>{
+    wsXml=s(wsXml,r(21+i,1),ctn.perSizeEans[sz]||'');
+    wsXml=s(wsXml,r(21+i,3),ctn.colour);
+    wsXml=s(wsXml,r(21+i,7),String(ctn.sizeQtys[sz]||0));
+  });
+  return wsXml;
+}
+
+// Fill one DC sticker block directly in worksheet XML (no ExcelJS).
+function _xmlFillDCBlock(wsXml,bs,ctn,totalCtns,invStr,poNum,styleName,pkgDate,dcCode){
+  const r=(off,col)=>`${String.fromCharCode(64+col)}${bs+off}`;
+  const s=_xmlSetInlineStr;
+  const _dci=DC_INFO[dcCode]||{};
+  wsXml=s(wsXml,r(3,5),`Invoice No:- ${invStr}`);
+  wsXml=s(wsXml,r(4,5),`Po Number :- ${poNum}`);
+  wsXml=s(wsXml,r(5,5),`Style:- ${styleName}`);
+  wsXml=s(wsXml,r(6,5),'Po Type :- DC');
+  wsXml=s(wsXml,r(10,1),`To: ${_dci.l1||'Reliance Retail Limited'}`);
+  wsXml=s(wsXml,r(11,5),'Net Weight : ');
+  wsXml=s(wsXml,r(12,5),'Gross Weight :');
+  wsXml=s(wsXml,r(13,5),'Total Qty  :  ');
+  wsXml=s(wsXml,r(14,5),`Pkg Date : ${pkgDate}`);
+  wsXml=s(wsXml,r(17,5),`${String(ctn.ctnNo).padStart(2,'0')} OF ${totalCtns}`);
+  wsXml=s(wsXml,r(20,1),ctn.artEan);
+  wsXml=s(wsXml,r(20,3),ctn.colour);
+  wsXml=s(wsXml,r(20,5),ctn.size);
+  wsXml=s(wsXml,r(20,7),String(ctn.qty));
+  return wsXml;
+}
+
+// Build sticker buffer — pure JSZip, no ExcelJS writeBuffer — eliminates RP corruption.
 async function _buildStickerBuffer(params){
   const{invNum,dcCode,ppb,pkgDateFmt,poNum,isRP,ppk,packsPerCtn,items}=params;
-  if(!items||!items.length){console.log('[sticker] no items');return null;}
+  if(!items||!items.length)return null;
   const sheetName=isRP?CTN_RP_SHEET[dcCode]:CTN_DC_SHEET[dcCode];
   const blockSize=isRP?RP_BLOCK_SIZE:DC_BLOCK_SIZE;
   const styleName=items[0]?.desc||'';
   const invStr=`GS/${invNum}`;
   const{cartons,totalCtns}=isRP?computeRPCartons(items,packsPerCtn):computeDCCartons(items,ppb);
-  console.log('[sticker] sheetName='+sheetName+' cartons='+cartons.length);
-  if(!cartons.length){console.log('[sticker] no cartons');return null;}
+  if(!cartons.length)return null;
+
   const b64=isRP?TMPL_CTN_RP:TMPL_CTN_DC;
   const bin=atob(b64);const raw=new Uint8Array(bin.length);
   for(let i=0;i<bin.length;i++)raw[i]=bin.charCodeAt(i);
+
+  // 1. Clean template (strips formulas, converts all strings to inlineStr, removes calcChain)
   const cleanBuf=await cleanTemplateZip(raw.buffer);
+  // 2. Extend worksheet if needed
   const extBuf=await ensureBlocks(cleanBuf,sheetName,cartons.length,blockSize);
-  const wb=new ExcelJS.Workbook();
-  await wb.xlsx.load(extBuf);
-  const ws=wb.getWorksheet(sheetName);
-  if(!ws){console.warn('[sticker] worksheet "'+sheetName+'" not found! Available:',wb.worksheets.map(s=>s.name));return null;}
-  ws.views=[{state:'normal',showGridLines:false}];
-  wb.worksheets.forEach(s=>{if(s!==ws)s.views=[{state:'normal'}];});
-  const allHUL=[];
-  // ExcelJS may return inlineStr cells as RichText objects — normalise to plain string
-  const _cellText=v=>typeof v==='string'?v:(v?.richText?v.richText.map(r=>r.text||'').join(''):String(v||''));
-  ws.eachRow({includeEmpty:false},(row,rn)=>{
-    row.eachCell({includeEmpty:false},cell=>{if(_cellText(cell.value)==='HANDLING UNIT LABEL')allHUL.push(rn);});
-  });
-  let blockStarts=allHUL.filter((rn,i)=>i===allHUL.length-1||allHUL[i+1]-rn>2);
-  console.log('[sticker] allHUL='+allHUL.length+' blockStarts='+blockStarts.length);
-  if(!blockStarts.length){
-    // Fallback: could not find HANDLING UNIT LABEL via scan (happens when inlineStr
-    // cells are read back as RichText by ExcelJS). Use row 1 as first block start
-    // and rebuild positions mathematically — same formula as the extend path below.
-    console.warn('[sticker] HUL scan found nothing — falling back to row-1 origin');
-    blockStarts=[1];
+
+  // 3. Write cell values directly in XML — no ExcelJS at all
+  const zip=await JSZip.loadAsync(extBuf);
+  // Find the worksheet file matching sheetName
+  const wbXml=await zip.file('xl/workbook.xml').async('string');
+  const sheetIdM=wbXml.match(new RegExp(`<sheet\\b[^>]*name="${sheetName.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}"[^>]*r:id="([^"]+)"`));
+  let wsPath=null;
+  if(sheetIdM){
+    const rId=sheetIdM[1];
+    const wbRels=await zip.file('xl/_rels/workbook.xml.rels').async('string');
+    const relM=wbRels.match(new RegExp(`<Relationship[^>]*Id="${rId}"[^>]*Target="([^"]+)"`));
+    if(relM)wsPath='xl/'+relM[1].replace(/^\.?\//,'');
   }
+  if(!wsPath){
+    // Fallback: only one sheet left after clean
+    wsPath=Object.keys(zip.files).find(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p));
+  }
+  if(!wsPath)throw new Error(`Worksheet "${sheetName}" not found in template`);
+
+  let wsXml=await zip.file(wsPath).async('string');
+
+  // Detect block start rows — scan for "HANDLING UNIT LABEL" text in XML.
+  // After cleanTemplateZip all string cells are inlineStr; look for the text
+  // anywhere within ~300 chars after a cell opening tag to find the row number.
+  const hulRows=[];
+  for(const m of wsXml.matchAll(/HANDLING UNIT LABEL/g)){
+    const before=wsXml.slice(Math.max(0,m.index-300),m.index);
+    const rM=[...before.matchAll(/\br="[A-Z]+(\d+)"/g)];
+    if(rM.length)hulRows.push(+rM[rM.length-1][1]);
+  }
+  let blockStarts=hulRows.filter((rn,i)=>i===hulRows.length-1||hulRows[i+1]-rn>2);
+  if(!blockStarts.length)blockStarts=[1];
   if(blockStarts.length<cartons.length){
     const origin=blockStarts[0];blockStarts=[];
     for(let i=0;i<cartons.length;i++)blockStarts.push(origin+i*blockSize);
   }
+
+  // Fill each carton block
   cartons.forEach((ctn,idx)=>{
-    if(isRP)fillRPStickerBlock(ws,blockStarts[idx]-1,ctn,totalCtns,invStr,poNum,styleName,pkgDateFmt,dcCode);
-    else    fillDCStickerBlock(ws,blockStarts[idx]-1,ctn,totalCtns,invStr,poNum,styleName,pkgDateFmt,dcCode);
+    const bs=blockStarts[idx]-1;
+    if(isRP)wsXml=_xmlFillRPBlock(wsXml,bs,ctn,totalCtns,invStr,poNum,styleName,pkgDateFmt,dcCode);
+    else    wsXml=_xmlFillDCBlock(wsXml,bs,ctn,totalCtns,invStr,poNum,styleName,pkgDateFmt,dcCode);
   });
-  // If template had extra blocks beyond what we filled, there is a real HUL row after the last
-  // used block — use the conservative last-data offset (25/20) to stay below it.
-  // If blockStarts was rebuilt to exactly cartons.length (extended or arithmetically built),
-  // there is no extra HUL — use the full blockSize-1 so the last sticker has the same
-  // trailing blank rows as every intermediate sticker (matching layout).
+
+  zip.file(wsPath,wsXml);
+
   const hadExtraBlocks=blockStarts.length>cartons.length;
   const lastContentOff=hadExtraBlocks?(isRP?25:20):(blockSize-1);
   const lastUsedRow=blockStarts[cartons.length-1]+lastContentOff;
-  ws.pageSetup=ws.pageSetup||{};ws.pageSetup.printArea=`A1:H${lastUsedRow}`;
-  wb.worksheets.filter(s=>s.name!==sheetName).forEach(s=>wb.removeWorksheet(s.id));
-  const rawOut=await wb.xlsx.writeBuffer();
-  const cleanedOut=await cleanTemplateZip(rawOut);
-  const fixedOut=await fixWorkbook(cleanedOut,sheetName);
-  return await trimOutputRows(fixedOut,lastUsedRow);
-}
 
-async function genCtnSticker(){
-  const{invNum,dcCode,fmtField,ppb,pkgDateFmt,poNum,isRP,ppk,packsPerCtn,items}=stickerInputs();
-  if(!invNum){toast('Please enter an Invoice Number.');return;}
-  if(!items.length){toast('All dispatch quantities are 0.');return;}
-  try{
-    const styleName=items[0]?.desc||'';
-    const invStr=`GS/${invNum}`;
-    const sheetName=isRP?CTN_RP_SHEET[dcCode]:CTN_DC_SHEET[dcCode];
-    const blockSize=isRP?RP_BLOCK_SIZE:DC_BLOCK_SIZE;
-
-    // Compute cartons first (need count before loading template)
-    const{cartons,totalCtns}=isRP
-      ?computeRPCartons(items,packsPerCtn)
-      :computeDCCartons(items,ppb);
-    if(!cartons.length){toast('All dispatch quantities are 0.');return;}
-
-    // Decode template and auto-extend on-the-fly if not enough blocks — no fixed cap
-    const b64=isRP?TMPL_CTN_RP:TMPL_CTN_DC;
-    const bin=atob(b64);const raw=new Uint8Array(bin.length);
-    for(let i=0;i<bin.length;i++)raw[i]=bin.charCodeAt(i);
-    // Remove dangling calcChain + printerSettings refs before ExcelJS touches the ZIP
-    const cleanBuf=await cleanTemplateZip(raw.buffer);
-    const extBuf=await ensureBlocks(cleanBuf,sheetName,cartons.length,blockSize);
-
-    // Load into ExcelJS
-    const wb=new ExcelJS.Workbook();
-    await wb.xlsx.load(extBuf);
-    const ws=wb.getWorksheet(sheetName);
-    if(!ws){
-      const available=wb.worksheets.map(s=>s.name).join(', ');
-      toast(`Sheet "${sheetName}" not found. Available: ${available}`);
-      return;
-    }
-    // Clear template's sheetView state — ExcelJS 4.x writes invalid <sheetView> XML
-    ws.views=[{state:'normal',showGridLines:false}];
-    wb.worksheets.forEach(s=>{ if(s!==ws) s.views=[{state:'normal'}]; });
-
-    // Scan block-start rows — normalise cell value to plain string (ExcelJS may return RichText)
-    const _ct=v=>typeof v==='string'?v:(v?.richText?v.richText.map(r=>r.text||'').join(''):String(v||''));
-    const allHUL=[];
-    ws.eachRow({includeEmpty:false},(row,rn)=>{
-      row.eachCell({includeEmpty:false},cell=>{
-        if(_ct(cell.value)==='HANDLING UNIT LABEL')allHUL.push(rn);
-      });
-    });
-    const blockStarts=allHUL.filter((rn,i)=>i===allHUL.length-1||allHUL[i+1]-rn>2);
-
-    // Fallback: if scan found nothing (RichText issue), start from row 1
-    if(!blockStarts.length) blockStarts.push(1);
-
-    // If ExcelJS scan found fewer blocks than needed, rebuild positions mathematically.
-    if(blockStarts.length<cartons.length){
-      const origin=blockStarts[0];
-      blockStarts.length=0;
-      for(let i=0;i<cartons.length;i++) blockStarts.push(origin+i*blockSize);
-    }
-
-    // Fill blocks
-    cartons.forEach((ctn,idx)=>{
-      if(isRP) fillRPStickerBlock(ws,blockStarts[idx]-1,ctn,totalCtns,invStr,poNum,styleName,pkgDateFmt,dcCode);
-      else     fillDCStickerBlock(ws,blockStarts[idx]-1,ctn,totalCtns,invStr,poNum,styleName,pkgDateFmt,dcCode);
-    });
-    // Set print area to only used blocks — avoids spliceRows which corrupts merge-cell XML
-    // If template had extra unused blocks, use conservative offset (25/20) to trim before next HUL.
-    // If blocks were rebuilt to exact count, use full blockSize-1 so last sticker matches others.
-    const hadExtraBlocks=blockStarts.length>cartons.length;
-    const lastContentOff=hadExtraBlocks?(isRP?25:20):(blockSize-1);
-    const lastUsedRow=blockStarts[cartons.length-1]+lastContentOff;
-    ws.pageSetup=ws.pageSetup||{};
-    ws.pageSetup.printArea=`A1:H${lastUsedRow}`;
-    ws.pageSetup.fitToPage=true;ws.pageSetup.fitToWidth=1;ws.pageSetup.fitToHeight=0;
-
-    // Remove all sheets except the one we filled, then write
-    wb.worksheets.filter(s=>s.name!==sheetName).forEach(s=>wb.removeWorksheet(s.id));
-    // Strip extra template blocks beyond the ones we filled (JSZip row-level trim,
-    // safer than ExcelJS spliceRows which corrupts mergeCells XML)
-    const rawOut=await wb.xlsx.writeBuffer();
-    // 1. Strip any r:id / printerSettings / sheetView junk ExcelJS re-introduced
-    const cleanedOut=await cleanTemplateZip(rawOut);
-    // 2. Replace workbook.xml + workbook.xml.rels with minimal clean version
-    //    (ExcelJS's sheet-removal leaves orphaned definedNames / broken rId refs)
-    const fixedOut=await fixWorkbook(cleanedOut, sheetName);
-    // 3. Remove extra template row blocks beyond the ones we filled
-    const trimmedOut=await trimOutputRows(fixedOut, lastUsedRow);
-    const blob=new Blob([trimmedOut],
-      {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
-    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
-    a.download=`CTN_Sticker_${invNum}_${dcCode}.xlsx`;a.click();
-    toast(`✓ ${isRP?'RP':'DC'} Carton Sticker downloaded`);
-  }catch(err){
-    console.error('genCtnSticker error:',err);
-    toast('Sticker error: '+err.message);
-  }
+  const preBuf=await zip.generateAsync({type:'arraybuffer'});
+  // 4. Rebuild minimal workbook.xml + rels (remove unused sheets, definedNames, etc.)
+  const fixedBuf=await fixWorkbook(preBuf,sheetName);
+  // 5. Trim rows beyond last used block
+  return await trimOutputRows(fixedBuf,lastUsedRow);
 }
 
 async function genSummary(){
