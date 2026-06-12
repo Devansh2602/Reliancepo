@@ -460,7 +460,8 @@ tfoot td.lft{text-align:left}
       </div>
       <div class="mftr-btns">
         <button class="btn-cancel" onclick="closeModal()">Cancel</button>
-        <button class="btn-gpdf" onclick="genExcel()">⬇ Invoice + Packing List + Carton Sticker</button>
+        <button class="btn-gpdf" onclick="genExcel()">⬇ Invoice + Packing List</button>
+        <button class="btn-gpdf" style="background:#059669" onclick="genStickerOnly()">⬇ Carton Sticker</button>
         <button class="btn-gpdf" style="background:#8b5cf6" onclick="genSummary()">⬇ Summary</button>
       </div>
     </div>
@@ -1133,28 +1134,33 @@ async function genExcel(){
 
   const buf=await wb.xlsx.writeBuffer();
 
-  // Download Invoice + Packing List
   const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
   const a=document.createElement('a');
   a.href=URL.createObjectURL(blob);
   a.download=`${invNum}-${dcInfo.dcName||dcCode},${fmtField} PACK.xlsx`;
   a.click();
 
-  // Download Carton Sticker as a separate file (avoids Excel corruption from merging)
-  try{
-    const stickerParams={invNum,dcCode,fmtField,ppb,pkgDateFmt,poNum,isRP,ppk,packsPerCtn,items};
-    const stickerBuf=await _buildStickerBuffer(stickerParams);
-    if(stickerBuf){
-      const sb=new Blob([stickerBuf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
-      const sa=document.createElement('a');
-      sa.href=URL.createObjectURL(sb);
-      sa.download=`${invNum}-${dcInfo.dcName||dcCode},${fmtField} STICKER.xlsx`;
-      sa.click();
-    }
-  }catch(se){console.warn('Sticker download failed:',se);}
-
   closeModal();
-  toast(`✓ Downloaded Pack + Sticker for ${invNum}`);
+  toast(`✓ Downloaded Invoice + Packing List for ${invNum}`);
+}
+
+async function genStickerOnly(){
+  const{invNum,dcCode,fmtField,ppb,pkgDateFmt,poNum,isRP,ppk,packsPerCtn,items}=stickerInputs();
+  if(!invNum){toast('Please enter an Invoice Number.');return;}
+  if(!items.length){toast('All dispatch quantities are 0.');return;}
+  const dcInfo=DC_INFO[dcCode]||{dcName:''};
+  try{
+    toast('Building sticker…');
+    const stickerBuf=await _buildStickerBuffer({invNum,dcCode,fmtField,ppb,pkgDateFmt,poNum,isRP,ppk,packsPerCtn,items});
+    if(!stickerBuf){toast('No cartons — sticker not generated.');return;}
+    const blob=new Blob([stickerBuf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download=`${invNum}-${dcInfo.dcName||dcCode},${fmtField} STICKER.xlsx`;
+    a.click();
+    closeModal();
+    toast(`✓ Downloaded Carton Sticker for ${invNum}`);
+  }catch(e){console.error('genStickerOnly:',e);toast('Sticker error: '+e.message);}
 }
 
 /* ═══ TEMPLATE STYLE DATA (from reference .xls) ═══════════════════ */
@@ -2350,6 +2356,23 @@ async function fixWorkbook(buf, sheetName){
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`+
       `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`+
       relsBody+`</Relationships>`);
+
+    // Rebuild [Content_Types].xml — remove Override entries for files that no longer exist
+    // (ExcelJS removeWorksheet deletes the XML file but may not update Content_Types,
+    // leaving dangling references that cause "We found a problem" in Excel)
+    const ctFile=zip.file('[Content_Types].xml');
+    if(ctFile){
+      let ct=await ctFile.async('string');
+      // Remove any Override whose PartName points to a file not in the zip
+      ct=ct.replace(/<Override\s[^/]*PartName="\/([^"]+)"[^>]*\/>/g,(m,path)=>{
+        return zip.file(path)?m:'';
+      });
+      // Ensure workbook.xml itself has the correct content type
+      const wbCT='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml';
+      if(!ct.includes(wbCT))
+        ct=ct.replace('</Types>',`<Override PartName="/xl/workbook.xml" ContentType="${wbCT}"/></Types>`);
+      zip.file('[Content_Types].xml',ct);
+    }
 
     return zip.generateAsync({type:'arraybuffer'});
   }catch(e){console.warn('fixWorkbook failed:',e);return buf;}
