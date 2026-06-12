@@ -1133,26 +1133,28 @@ async function genExcel(){
 
   const buf=await wb.xlsx.writeBuffer();
 
-  // Merge carton sticker as 3rd worksheet using style-remapping (preserves borders/fills)
-  let finalBuf=buf;
-  try{
-    const stickerParams={invNum,dcCode,fmtField,ppb,pkgDateFmt,poNum,isRP,ppk,packsPerCtn,items};
-    console.log('[pack] building sticker buffer...');
-    const stickerBuf=await _buildStickerBuffer(stickerParams);
-    console.log('[pack] stickerBuf='+(stickerBuf?'OK ('+stickerBuf.byteLength+' bytes)':'NULL'));
-    if(stickerBuf){
-      finalBuf=await _mergeWorkbookWithSticker(buf,stickerBuf);
-      console.log('[pack] merge done, finalBuf='+finalBuf.byteLength+' bytes');
-    }
-  }catch(se){console.warn('Sticker merge failed:',se);}
-
-  const blob=new Blob([finalBuf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  // Download Invoice + Packing List
+  const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
   const a=document.createElement('a');
   a.href=URL.createObjectURL(blob);
-  a.download=`${invNum}-${dcInfo.dcName||dcCode},${fmtField}.xlsx`;
+  a.download=`${invNum}-${dcInfo.dcName||dcCode},${fmtField} PACK.xlsx`;
   a.click();
+
+  // Download Carton Sticker as a separate file (avoids Excel corruption from merging)
+  try{
+    const stickerParams={invNum,dcCode,fmtField,ppb,pkgDateFmt,poNum,isRP,ppk,packsPerCtn,items};
+    const stickerBuf=await _buildStickerBuffer(stickerParams);
+    if(stickerBuf){
+      const sb=new Blob([stickerBuf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+      const sa=document.createElement('a');
+      sa.href=URL.createObjectURL(sb);
+      sa.download=`${invNum}-${dcInfo.dcName||dcCode},${fmtField} STICKER.xlsx`;
+      sa.click();
+    }
+  }catch(se){console.warn('Sticker download failed:',se);}
+
   closeModal();
-  toast(`✓ Downloaded: ${a.download}`);
+  toast(`✓ Downloaded Pack + Sticker for ${invNum}`);
 }
 
 /* ═══ TEMPLATE STYLE DATA (from reference .xls) ═══════════════════ */
