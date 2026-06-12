@@ -2249,40 +2249,51 @@ async function cleanTemplateZip(rawBuf){
     // ── 1. Remove calcChain.xml ──────────────────────────────────────────────
     if(zip.file('xl/calcChain.xml')) zip.remove('xl/calcChain.xml');
 
-    // Remove from [Content_Types].xml
-    const ctFile=zip.file('[Content_Types].xml');
-    if(ctFile){
-      let ct=await ctFile.async('string');
-      ct=ct.replace(/<Override[^>]+calcChain\.xml[^>]*\/?>/g,'');
-      zip.file('[Content_Types].xml',ct);
+    // ── 2. Read shared strings so we can inline them, then delete the file ───
+    // ExcelJS rebuilds the shared string table when it writes — cloned template rows
+    // keep their original t="s" indices, which become wrong after the rebuild.
+    // Converting all t="s" cells to inlineStr before load eliminates the mismatch.
+    const ssFile=zip.file('xl/sharedStrings.xml');
+    const strings=[];
+    if(ssFile){
+      const ssXml=await ssFile.async('string');
+      for(const m of ssXml.matchAll(/<si>([\s\S]*?)<\/si>/g))
+        strings.push([...m[1].matchAll(/<t(?:[^>]*)?>([^<]*)<\/t>/g)].map(t=>t[1]).join(''));
     }
 
-    // Remove from workbook.xml.rels
-    const wbRelsFile=zip.file('xl/_rels/workbook.xml.rels');
-    if(wbRelsFile){
-      let wbRels=await wbRelsFile.async('string');
-      wbRels=wbRels.replace(/<Relationship[^>]+calcChain\.xml[^>]*\/?>/g,'');
-      zip.file('xl/_rels/workbook.xml.rels',wbRels);
-    }
-
-    // ── 2. Strip pageSetup r:id + bad sheetView state in every worksheet ──────
+    // ── 3. Strip pageSetup r:id + bad sheetView + shared formulas in worksheets
     const wsFiles=Object.keys(zip.files).filter(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p));
     for(const wf of wsFiles){
       let wsXml=await zip.file(wf).async('string');
 
-      // Strip r:id attribute from <pageSetup> so no printer-settings rel needed
       wsXml=wsXml.replace(/(<pageSetup\b[^>]*?)\s+r:id="[^"]*"/g,'$1');
-
-      // Replace entire <sheetViews>...</sheetViews> with a minimal safe version.
       wsXml=wsXml.replace(/<sheetViews>[\s\S]*?<\/sheetViews>/,
         '<sheetViews><sheetView workbookViewId="0"><selection activeCell="A1" sqref="A1"/></sheetView></sheetViews>');
 
-      // Expand shared formulas — ExcelJS throws "master must exist above/left of clone"
-      wsXml=wsXml.replace(/<f\b([^>]*)\bt="shared"\b([^>]*)>([\s\S]*?)<\/f>/g,(_,_pre,_post,formula)=>`<f>${formula}</f>`);
+      // Expand shared formulas so ExcelJS doesn't throw "master must exist" errors
+      wsXml=wsXml.replace(/<f\b([^>]*)\bt="shared"\b([^>]*)>([\s\S]*?)<\/f>/g,(_,_a,_b,f)=>`<f>${f}</f>`);
       wsXml=wsXml.replace(/<f\b[^>]*\bt="shared"\b[^>]*\/>/g,'');
 
-      // Strip ALL elements that can leave dangling r:id / external references.
-      // These are safe to remove for the sticker — it's a pure cells+styles document.
+      // Convert ALL t="s" cells to inlineStr using the shared strings we read above.
+      // Covers open-close form: <c ... t="s"><v>N</v></c>
+      wsXml=wsXml.replace(/<c\b([^>]*)\bt="s"\b([^>]*)>([\s\S]*?)<\/c>/g,(m,pre,post,inner)=>{
+        const vM=inner.match(/<v[^>]*>(\d+)<\/v>/);
+        const raw=vM?(strings[+vM[1]]||''):'';
+        const esc=raw.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        const all=pre+post;
+        const sA=(all.match(/\bs="[^"]*"/))||[''];
+        const rA=(all.match(/\br="[^"]*"/))||[''];
+        return `<c ${rA[0]}${sA[0]?' '+sA[0]:''} t="inlineStr"><is><t>${esc}</t></is></c>`;
+      });
+      // Self-closing t="s" cells
+      wsXml=wsXml.replace(/<c\b([^>]*)\bt="s"\b([^>]*)\s*\/>/g,(m,pre,post)=>{
+        const all=pre+post;
+        const sA=(all.match(/\bs="[^"]*"/))||[''];
+        const rA=(all.match(/\br="[^"]*"/))||[''];
+        return `<c ${rA[0]}${sA[0]?' '+sA[0]:''} t="inlineStr"><is><t></t></is></c>`;
+      });
+
+      // Strip all elements that leave dangling r:id / external refs
       for(const tag of['drawing','legacyDrawing','picture','tablePart','oleObjects',
                         'activeX','extLst','conditionalFormatting','dataValidations',
                         'headerFooter','hyperlinks','printOptions']){
@@ -2292,22 +2303,36 @@ async function cleanTemplateZip(rawBuf){
 
       zip.file(wf,wsXml);
 
-      // Remove the worksheet rels file entirely — sticker worksheets need no external rels
+      // Remove worksheet rels entirely — sticker needs no external refs
       const relsPath=wf.replace(/^xl\/worksheets\//,'xl/worksheets/_rels/').replace(/\.xml$/,'.xml.rels');
       if(zip.file(relsPath)) zip.remove(relsPath);
     }
 
-    // ── 3. Remove all binary/media files that could leave broken references ───
+    // ── 4. Remove sharedStrings.xml (all strings are now inline) ────────────
+    if(ssFile) zip.remove('xl/sharedStrings.xml');
+
+    // ── 5. Remove binary/media files ────────────────────────────────────────
     Object.keys(zip.files)
       .filter(p=>p.toLowerCase().includes('printersettings')||
                  /^xl\/(drawings|media|activeX|embeddings)\//.test(p))
       .forEach(p=>zip.remove(p));
 
-    // ── 4. Strip drawing / media overrides from [Content_Types].xml ─────────
+    // ── 6. Clean [Content_Types].xml ────────────────────────────────────────
+    const ctFile=zip.file('[Content_Types].xml');
     if(ctFile){
       let ct=await ctFile.async('string');
+      ct=ct.replace(/<Override[^>]+calcChain\.xml[^>]*\/?>/g,'');
+      ct=ct.replace(/<Override[^>]+sharedStrings[^>]*\/?>/gi,'');
       ct=ct.replace(/<Override[^>]+(drawing|media|printerSettings|activeX)[^>]*\/>/gi,'');
       zip.file('[Content_Types].xml',ct);
+    }
+
+    // ── 7. Remove sharedStrings from workbook.xml.rels ───────────────────────
+    const wbRelsFile=zip.file('xl/_rels/workbook.xml.rels');
+    if(wbRelsFile){
+      let wbRels=await wbRelsFile.async('string');
+      wbRels=wbRels.replace(/<Relationship[^>]+(calcChain|sharedStrings)[^>]*\/?>/g,'');
+      zip.file('xl/_rels/workbook.xml.rels',wbRels);
     }
 
     return zip.generateAsync({type:'arraybuffer'});
