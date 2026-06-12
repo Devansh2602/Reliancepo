@@ -2274,38 +2274,41 @@ async function cleanTemplateZip(rawBuf){
       wsXml=wsXml.replace(/(<pageSetup\b[^>]*?)\s+r:id="[^"]*"/g,'$1');
 
       // Replace entire <sheetViews>...</sheetViews> with a minimal safe version.
-      // ExcelJS / template sheetViews often contain frozen panes, topLeftCell offsets,
-      // and <selection sqref> pointing inside merged regions — all trigger content errors.
       wsXml=wsXml.replace(/<sheetViews>[\s\S]*?<\/sheetViews>/,
         '<sheetViews><sheetView workbookViewId="0"><selection activeCell="A1" sqref="A1"/></sheetView></sheetViews>');
 
       // Expand shared formulas — ExcelJS throws "master must exist above/left of clone"
-      // when a clone cell appears before its master in processing order.
-      // Fix: convert master shared formulas to plain formulas; drop clone <f> refs
-      // (clone cells keep their cached <v> values, which is fine for a display template).
       wsXml=wsXml.replace(/<f\b([^>]*)\bt="shared"\b([^>]*)>([\s\S]*?)<\/f>/g,(_,_pre,_post,formula)=>`<f>${formula}</f>`);
       wsXml=wsXml.replace(/<f\b[^>]*\bt="shared"\b[^>]*\/>/g,'');
 
+      // Strip ALL elements that can leave dangling r:id / external references.
+      // These are safe to remove for the sticker — it's a pure cells+styles document.
+      for(const tag of['drawing','legacyDrawing','picture','tablePart','oleObjects',
+                        'activeX','extLst','conditionalFormatting','dataValidations',
+                        'headerFooter','hyperlinks','printOptions']){
+        wsXml=wsXml.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}>`,'g'),'');
+        wsXml=wsXml.replace(new RegExp(`<${tag}\\b[^>]*\\/>`,'g'),'');
+      }
+
       zip.file(wf,wsXml);
 
-      // Clean the sheet's own _rels file
+      // Remove the worksheet rels file entirely — sticker worksheets need no external rels
       const relsPath=wf.replace(/^xl\/worksheets\//,'xl/worksheets/_rels/').replace(/\.xml$/,'.xml.rels');
-      const relsFile=zip.file(relsPath);
-      if(relsFile){
-        let relsXml=await relsFile.async('string');
-        relsXml=relsXml.replace(/<Relationship[^>]+printerSettings[^>]*\/?>/g,'');
-        if(!/<Relationship\b/.test(relsXml)){
-          zip.remove(relsPath); // empty rels file causes its own issues — just remove it
-        } else {
-          zip.file(relsPath,relsXml);
-        }
-      }
+      if(zip.file(relsPath)) zip.remove(relsPath);
     }
 
-    // ── 3. Remove the printerSettings .bin files themselves ──────────────────
+    // ── 3. Remove all binary/media files that could leave broken references ───
     Object.keys(zip.files)
-      .filter(p=>p.toLowerCase().includes('printersettings'))
+      .filter(p=>p.toLowerCase().includes('printersettings')||
+                 /^xl\/(drawings|media|activeX|embeddings)\//.test(p))
       .forEach(p=>zip.remove(p));
+
+    // ── 4. Strip drawing / media overrides from [Content_Types].xml ─────────
+    if(ctFile){
+      let ct=await ctFile.async('string');
+      ct=ct.replace(/<Override[^>]+(drawing|media|printerSettings|activeX)[^>]*\/>/gi,'');
+      zip.file('[Content_Types].xml',ct);
+    }
 
     return zip.generateAsync({type:'arraybuffer'});
   }catch(e){console.warn('cleanTemplateZip failed, using raw:',e);return rawBuf;}
@@ -2487,325 +2490,6 @@ async function ensureBlocks(rawBuf,sheetName,neededBlocks,blockSize){
     zip.file(`xl/worksheets/${sf}`,wsXml);
     return zip.generateAsync({type:'arraybuffer'});
   }catch(e){console.warn('ensureBlocks failed:',e);return rawBuf;}
-}
-
-// Merge sticker buffer into invoice buffer via JSZip with proper style remapping.
-// Appends sticker fonts/fills/borders to invoice styles.xml so all s="N" indices
-// are correctly remapped — borders, fills, and fonts are fully preserved.
-async function _mergeWorkbookWithSticker(invBuf,stickerBuf){
-  if(typeof JSZip==='undefined')return invBuf;
-  try{
-    // Clean invoice buf first (strip any leftover printerSettings / calcChain refs)
-    const cleanedInv=await cleanTemplateZip(invBuf);
-    const invZip=await JSZip.loadAsync(cleanedInv);
-    const stkZip=await JSZip.loadAsync(stickerBuf);
-
-    // ── sticker worksheet XML ─────────────────────────────────────────────────
-    const stkWsPath=Object.keys(stkZip.files).find(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p));
-    if(!stkWsPath){console.warn('[merge] no sticker sheet found');return invBuf;}
-    let stkWsXml=await stkZip.file(stkWsPath).async('string');
-
-    // Convert sticker shared-string cells → inline strings
-    // (sticker has its own sharedStrings which won't exist in the merged workbook)
-    const ssFile=stkZip.file('xl/sharedStrings.xml');
-    const strings=[];
-    if(ssFile){
-      const ssXml=await ssFile.async('string');
-      for(const m of ssXml.matchAll(/<si>([\s\S]*?)<\/si>/g)){
-        strings.push([...m[1].matchAll(/<t(?:[^>]*)?>([^<]*)<\/t>/g)].map(t=>t[1]).join(''));
-      }
-      // Pass 1: standard form — <c ...><v>N</v></c> or <c ...><f>...</f><v>N</v></c> with t="s"
-      stkWsXml=stkWsXml.replace(/<c(\s[^>]*)>(?:<f(?:[^>]*)>[\s\S]*?<\/f>)?<v>(\d+)<\/v><\/c>/g,(m,attrs,idx)=>{
-        if(!attrs.includes('t="s"'))return m;
-        const raw=strings[+idx]||'';
-        const sAttr=(attrs.match(/\bs="(\d+)"/))?.[0]||'';
-        const rAttr=(attrs.match(/\br="[^"]*"/))?.[0]||'';
-        return `<c ${rAttr}${sAttr?' '+sAttr:''} t="inlineStr"><is><t>${raw}</t></is></c>`;
-      });
-      // Pass 2: catch-all for ANY remaining t="s" open-close cells (xml:space on <v>, whitespace, etc.)
-      stkWsXml=stkWsXml.replace(/<c\b([^>]*)\bt="s"\b([^>]*)>([\s\S]*?)<\/c>/g,(m,pre,post,content)=>{
-        const vM=content.match(/<v[^>]*>(\d+)<\/v>/);
-        const raw=vM?(strings[+vM[1]]||''):'';
-        const attrs=pre+post;
-        const sAttr=(attrs.match(/\bs="[^"]*"/))?.[0]||'';
-        const rAttr=(attrs.match(/\br="[^"]*"/))?.[0]||'';
-        return `<c ${rAttr}${sAttr?' '+sAttr:''} t="inlineStr"><is><t>${raw}</t></is></c>`;
-      });
-      // Pass 3: self-closing t="s" cells (empty shared-string references)
-      stkWsXml=stkWsXml.replace(/<c\b([^>]*)\bt="s"\b([^>]*)\/>/g,(m,pre,post)=>{
-        const attrs=pre+post;
-        const sAttr=(attrs.match(/\bs="[^"]*"/))?.[0]||'';
-        const rAttr=(attrs.match(/\br="[^"]*"/))?.[0]||'';
-        return `<c ${rAttr}${sAttr?' '+sAttr:''} t="inlineStr"><is><t></t></is></c>`;
-      });
-      // Diagnostic: warn if any t="s" cells remain (would be invalid in merged workbook)
-      const leftover=(stkWsXml.match(/\bt="s"/g)||[]).length;
-      if(leftover>0)console.warn('[merge] WARNING: '+leftover+' t="s" cells remain after conversion — invalid shared-string refs!');
-      else console.log('[merge] all t="s" cells converted to inlineStr. strings.length='+strings.length);
-    }
-
-    // ── style merge ───────────────────────────────────────────────────────────
-    let invSty=await invZip.file('xl/styles.xml').async('string');
-    const stkSty=await stkZip.file('xl/styles.xml').async('string');
-
-    // Extract all complete child elements from a named list (handles self-closing + open/close)
-    function extractItems(xml, listTag, childTag){
-      // Extract the body of the list element
-      const listRe=new RegExp(`<${listTag}[^>]*>([\\s\\S]*?)<\\/${listTag}>`,'i');
-      const listM=xml.match(listRe);
-      if(!listM)return [];
-      const body=listM[1];
-      const items=[];
-      let pos=0;
-      while(pos<body.length){
-        const start=body.indexOf(`<${childTag}`,pos);
-        if(start===-1)break;
-        // Check self-closing: scan for /> or > (whichever comes first after <tag)
-        let i=start+childTag.length+1;
-        while(i<body.length&&body[i]!='>'&&!(body[i]=='/'&&body[i+1]=='>'))i++;
-        if(i>=body.length)break;
-        if(body[i]==='/'&&body[i+1]==='>'){
-          // self-closing
-          items.push(body.slice(start,i+2));
-          pos=i+2;
-        }else{
-          // open tag — find matching close tag
-          const closeTag=`</${childTag}>`;
-          const closePos=body.indexOf(closeTag,i+1);
-          if(closePos===-1){items.push(body.slice(start,i+1));pos=i+1;}
-          else{items.push(body.slice(start,closePos+closeTag.length));pos=closePos+closeTag.length;}
-        }
-      }
-      return items;
-    }
-
-    // Count entries in a style list element
-    function countItems(xml,listTag,childTag){return extractItems(xml,listTag,childTag).length;}
-
-    // Update count= attribute on a list element; add it if missing
-    function updateCount(xml,listTag,newCount){
-      if(xml.match(new RegExp(`<${listTag}[^>]*count="`))){
-        return xml.replace(new RegExp(`(<${listTag}[^>]*count=")\\d+(")`),`$1${newCount}$2`);
-      }
-      return xml.replace(new RegExp(`(<${listTag})`),`$1 count="${newCount}"`);
-    }
-
-    const invFontN  =countItems(invSty,'fonts','font');
-    const invFillN  =countItems(invSty,'fills','fill');
-    const invBorderN=countItems(invSty,'borders','border');
-    const invXfN    =countItems(invSty,'cellXfs','xf');
-
-    console.log('[sticker-merge] inv fonts='+invFontN+' fills='+invFillN+' borders='+invBorderN+' xfs='+invXfN);
-
-    const stkFonts  =extractItems(stkSty,'fonts','font');
-    const stkFills  =extractItems(stkSty,'fills','fill');
-    const stkBorders=extractItems(stkSty,'borders','border');
-    const stkXfsRaw =extractItems(stkSty,'cellXfs','xf');
-
-    console.log('[sticker-merge] stk fonts='+stkFonts.length+' fills='+stkFills.length+' borders='+stkBorders.length+' xfs='+stkXfsRaw.length);
-
-    // ── Merge custom number formats (numFmtId >= 164) ─────────────────────────
-    // The sticker uses numFmtId=164 ("0.000") for weight cells. Without merging
-    // this definition into the invoice styles, Excel reports "corrupt content".
-    const invNumFmtIds=new Set([...(invSty.matchAll(/\bnumFmtId="(\d+)"/g))].map(m=>+m[1]));
-    const invMaxCustomId=Math.max(163,...[...invNumFmtIds].filter(id=>id>=164));
-    const stkNumFmtBlock=stkSty.match(/<numFmts[^>]*>([\s\S]*?)<\/numFmts>/);
-    const fmtIdRemap={};  // sticker custom ID → new merged ID
-    let nextFmtId=invMaxCustomId+1;
-    const newNumFmtEntries=[];
-    if(stkNumFmtBlock){
-      for(const fm of stkNumFmtBlock[1].matchAll(/<numFmt\s[^>]*numFmtId="(\d+)"[^>]*\/?>/g)){
-        const origId=+fm[1];
-        if(origId>=164&&!invNumFmtIds.has(origId)){
-          const newId=nextFmtId++;
-          fmtIdRemap[origId]=newId;
-          newNumFmtEntries.push(fm[0].replace(`numFmtId="${origId}"`,`numFmtId="${newId}"`));
-        } else if(origId>=164){
-          fmtIdRemap[origId]=origId; // already present, keep as-is
-        }
-      }
-    }
-    if(newNumFmtEntries.length){
-      if(/<numFmts/.test(invSty)){
-        const existingCount=[...(invSty.matchAll(/<numFmt\b/g))].length;
-        invSty=invSty.replace(/<\/numFmts>/,newNumFmtEntries.join('')+'</numFmts>');
-        invSty=invSty.replace(/(<numFmts[^>]*count=")(\d+)(")/,`$1${existingCount+newNumFmtEntries.length}$3`);
-      } else {
-        // No numFmts section in invoice — insert one before <fonts>
-        invSty=invSty.replace(/<fonts/,`<numFmts count="${newNumFmtEntries.length}">${newNumFmtEntries.join('')}</numFmts><fonts`);
-      }
-    }
-
-    // Remap sticker xf entries: shift all style IDs by invoice counts + remap numFmtIds
-    const stkXfs=stkXfsRaw.map(xf=>xf
-      .replace(/\bfontId="(\d+)"/g,  (_,n)=>`fontId="${+n+invFontN}"`)
-      .replace(/\bfillId="(\d+)"/g,  (_,n)=>`fillId="${+n+invFillN}"`)
-      .replace(/\bborderId="(\d+)"/g,(_,n)=>`borderId="${+n+invBorderN}"`)
-      .replace(/\bxfId="\d+"/g,'xfId="0"')
-      .replace(/\bnumFmtId="(\d+)"/g,(_,n)=>{const r=fmtIdRemap[+n];return r!=null?`numFmtId="${r}"`:_;})
-    );
-
-    // Append sticker styles to invoice styles
-    function appendStyles(xml,listTag,childTag,newItems){
-      if(!newItems.length)return xml;
-      const newTotal=countItems(xml,listTag,childTag)+newItems.length;
-      xml=xml.replace(new RegExp(`<\\/${listTag}>`),newItems.join('')+`</${listTag}>`);
-      return updateCount(xml,listTag,newTotal);
-    }
-
-    invSty=appendStyles(invSty,'fonts',  'font',  stkFonts);
-    invSty=appendStyles(invSty,'fills',  'fill',  stkFills);
-    invSty=appendStyles(invSty,'borders','border',stkBorders);
-    invSty=appendStyles(invSty,'cellXfs','xf',    stkXfs);
-    invZip.file('xl/styles.xml',invSty);
-
-    // Strip any r:id-referencing elements from sticker worksheet before inserting
-    // (drawings, legacy drawings, tables — these need a .rels file we don't include)
-    stkWsXml=stkWsXml.replace(/<drawing\s[^>]*\/>/g,'');
-    stkWsXml=stkWsXml.replace(/<legacyDrawing\s[^>]*\/>/g,'');
-    stkWsXml=stkWsXml.replace(/<tablePart\s[^>]*\/>/g,'');
-    stkWsXml=stkWsXml.replace(/<picture\s[^>]*\/>/g,'');
-
-    // Remap all s="N" cell-style references in sticker worksheet
-    const totalMergedXfs=invXfN+stkXfsRaw.length;
-    stkWsXml=stkWsXml.replace(/\bs="(\d+)"/g,(_,n)=>{
-      const remapped=+n+invXfN;
-      if(remapped>=totalMergedXfs){
-        console.warn('[merge] s="'+n+'" remapped to '+remapped+' but totalXfs='+totalMergedXfs+' — clamping to 0');
-        return 's="0"';
-      }
-      return `s="${remapped}"`;
-    });
-    console.log('[merge] style remap done. invXfN='+invXfN+' stkXfs='+stkXfsRaw.length+' total='+totalMergedXfs);
-
-    // ── add sticker sheet to invoice workbook ─────────────────────────────────
-    const invWbXml=await invZip.file('xl/workbook.xml').async('string');
-    const usedIds=[...invWbXml.matchAll(/sheetId="(\d+)"/g)].map(m=>+m[1]);
-    const newId=Math.max(0,...usedIds)+1;
-    const newFile=`sheet${newId}.xml`;
-    const newRid=`rId${newId+20}`;
-
-    invZip.file(`xl/worksheets/${newFile}`,stkWsXml);
-    invZip.file('xl/workbook.xml',invWbXml.replace('</sheets>',
-      `<sheet name="Carton Sticker" sheetId="${newId}" r:id="${newRid}"/></sheets>`));
-
-    let wbRels=await invZip.file('xl/_rels/workbook.xml.rels').async('string');
-    invZip.file('xl/_rels/workbook.xml.rels',wbRels.replace('</Relationships>',
-      `<Relationship Id="${newRid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/${newFile}"/></Relationships>`));
-
-    let ct=await invZip.file('[Content_Types].xml').async('string');
-    if(!ct.includes(newFile))
-      invZip.file('[Content_Types].xml',ct.replace('</Types>',
-        `<Override PartName="/xl/worksheets/${newFile}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`));
-
-    const rawMerged=await invZip.generateAsync({type:'arraybuffer'});
-    return await _fixMergedWb(rawMerged);
-  }catch(e){console.warn('_mergeWorkbookWithSticker failed:',e);return invBuf;}
-}
-
-// Final cleanup for merged 3-sheet workbook: strip ExcelJS artifacts from workbook XML
-// (workbookProtection, definedNames, calcPr, theme refs) and rebuild minimally.
-// This eliminates the "We found a problem with some content" Excel error on BANGALORE DC packs.
-async function _fixMergedWb(buf){
-  if(typeof JSZip==='undefined')return buf;
-  try{
-    const zip=await JSZip.loadAsync(buf);
-    // 1. Remove calcChain
-    if(zip.file('xl/calcChain.xml'))zip.remove('xl/calcChain.xml');
-    let ct=await zip.file('[Content_Types].xml').async('string');
-    ct=ct.replace(/<Override[^>]+calcChain\.xml[^>]*\/?>/g,'');
-    // Ensure all required OOXML parts have their CORRECT content-type overrides.
-    // Check for correct content type (not just path presence) — ExcelJS can write a wrong
-    // generic Override that we need to replace, and missing declarations = corruption.
-    const ctParts=[
-      {file:'xl/sharedStrings.xml',
-       ct:'application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml',
-       path:'/xl/sharedStrings.xml'},
-      {file:'xl/styles.xml',
-       ct:'application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml',
-       path:'/xl/styles.xml'},
-      {file:'xl/theme/theme1.xml',
-       ct:'application/vnd.openxmlformats-officedocument.theme+xml',
-       path:'/xl/theme/theme1.xml'},
-    ];
-    for(const p of ctParts){
-      if(!zip.file(p.file))continue;
-      // Check if a correct Override already exists
-      if(ct.includes(`ContentType="${p.ct}"`))continue;
-      // Remove any existing (possibly wrong) Override for this path, then add correct one
-      const escapedPath=p.path.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-      ct=ct.replace(new RegExp(`<Override[^>]+PartName="${escapedPath}"[^>]*\\/?>`),'');
-      ct=ct.replace('</Types>',`<Override PartName="${p.path}" ContentType="${p.ct}"/></Types>`);
-    }
-    // Ensure every worksheet file has its correct content-type Override
-    const wsCT='application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml';
-    for(const wsF of Object.keys(zip.files).filter(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p))){
-      const pn='/'+wsF;
-      if(ct.includes(pn))continue;  // already present
-      ct=ct.replace('</Types>',`<Override PartName="${pn}" ContentType="${wsCT}"/></Types>`);
-    }
-    zip.file('[Content_Types].xml',ct);
-    console.log('[fixMergedWb] Content_Types updated. sheets in zip='+
-      Object.keys(zip.files).filter(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p)).join(','));
-    // 2. Read current workbook XML and rels
-    const wbXml=await zip.file('xl/workbook.xml').async('string');
-    let wbRels=await zip.file('xl/_rels/workbook.xml.rels').async('string');
-    wbRels=wbRels.replace(/<Relationship[^>]+calcChain\.xml[^>]*\/?>/g,'');
-    // 3. Extract sheet entries from workbook.xml
-    const sheets=[];
-    for(const m of wbXml.matchAll(/<sheet\b[^>]*>/g)){
-      const nm=(m[0].match(/\bname="([^"]*)"/))||[,''];
-      const sid=(m[0].match(/\bsheetId="([^"]*)"/))||[,''];
-      const rid=(m[0].match(/\br:id="([^"]*)"/))||[,''];
-      if(rid[1])sheets.push({name:nm[1],sheetId:sid[1],rid:rid[1]});
-    }
-    // 4. Map rels rId → Target
-    const relsMap={};
-    for(const m of wbRels.matchAll(/Id="([^"]+)"[^>]+Target="([^"]+)"/g))
-      relsMap[m[1]]=m[2];
-    const hasStyles=!!zip.file('xl/styles.xml');
-    const hasSS=!!zip.file('xl/sharedStrings.xml');
-    const hasTheme=!!zip.file('xl/theme/theme1.xml');
-    console.log('[fixMergedWb] sheets='+sheets.map(s=>s.name).join('|')+' styles='+hasStyles+' ss='+hasSS+' theme='+hasTheme);
-    // 5. Rebuild minimal workbook.xml — no workbookProtection, definedNames, calcPr
-    const sheetsXml=sheets.map(s=>`<sheet name="${s.name}" sheetId="${s.sheetId}" r:id="${s.rid}"/>`).join('');
-    zip.file('xl/workbook.xml',
-      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`+
-      `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"`+
-      ` xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">`+
-      `<bookViews><workbookView xWindow="0" yWindow="0" windowWidth="14400" windowHeight="8400"/></bookViews>`+
-      `<sheets>${sheetsXml}</sheets>`+
-      `</workbook>`);
-    // 6. Rebuild minimal workbook.xml.rels — sheets + styles + sharedStrings + theme (if present)
-    const allNums=[...wbRels.matchAll(/Id="rId(\d+)"/g)].map(m=>+m[1]);
-    let nxt=Math.max(0,...allNums)+1;
-    let rBody=sheets.map(s=>{
-      const t=relsMap[s.rid]||`worksheets/sheet${s.sheetId}.xml`;
-      return `<Relationship Id="${s.rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="${t}"/>`;
-    }).join('');
-    if(hasStyles) rBody+=`<Relationship Id="rId${nxt++}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>`;
-    if(hasSS) rBody+=`<Relationship Id="rId${nxt++}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>`;
-    if(hasTheme) rBody+=`<Relationship Id="rId${nxt++}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>`;
-    zip.file('xl/_rels/workbook.xml.rels',
-      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`+
-      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`+
-      rBody+`</Relationships>`);
-    // 7. Clean sheetViews + strip pageSetup r:id + strip dangling r:id elements in all worksheets
-    const wsFs=Object.keys(zip.files).filter(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p));
-    for(const wf of wsFs){
-      let wsXml=await zip.file(wf).async('string');
-      wsXml=wsXml.replace(/(<pageSetup\b[^>]*?)\s+r:id="[^"]*"/g,'$1');
-      wsXml=wsXml.replace(/<sheetViews>[\s\S]*?<\/sheetViews>/,
-        '<sheetViews><sheetView workbookViewId="0"><selection activeCell="A1" sqref="A1"/></sheetView></sheetViews>');
-      // Strip elements that reference worksheet rels (drawings etc.) which may not exist in merged workbook
-      wsXml=wsXml.replace(/<drawing\s[^>]*\/>/g,'');
-      wsXml=wsXml.replace(/<legacyDrawing\s[^>]*\/>/g,'');
-      wsXml=wsXml.replace(/<tablePart\s[^>]*\/>/g,'');
-      wsXml=wsXml.replace(/<picture\s[^>]*\/>/g,'');
-      zip.file(wf,wsXml);
-    }
-    return zip.generateAsync({type:'arraybuffer'});
-  }catch(e){console.warn('_fixMergedWb failed:',e);return buf;}
 }
 
 // Build sticker buffer (same pipeline as genCtnSticker but returns buffer, no download)
