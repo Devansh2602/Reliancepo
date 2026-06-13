@@ -2452,22 +2452,28 @@ async function ensureBlocks(rawBuf,sheetName,neededBlocks,blockSize){
 // Set a cell in worksheet XML to an inlineStr value, preserving its style attribute.
 // Works after cleanTemplateZip (all string cells already inlineStr, no shared strings).
 function _xmlSetInlineStr(wsXml,ref,value){
-  const esc=String(value==null?'':value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  // Match existing cell (full element or self-closing)
+  const esc=String(value==null?'':value)
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g,'') // strip invalid XML control chars
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  // Match existing cell (full element or self-closing).
+  // Use function replacement to avoid JavaScript interpreting $1/$2/etc in template content.
   const cRe=new RegExp(`<c\\b([^>]*)\\br="${ref}"([^>]*)(?:/>|>[\\s\\S]*?</c>)`);
   const m=wsXml.match(cRe);
   if(m){
     const attrs=(m[1]||'')+(m[2]||'');
     const sM=attrs.match(/\bs="([^"]*)"/);
     const sAttr=sM?` s="${sM[1]}"`:'';
-    return wsXml.replace(cRe,`<c r="${ref}"${sAttr} t="inlineStr"><is><t>${esc}</t></is></c>`);
+    const replacement=`<c r="${ref}"${sAttr} t="inlineStr"><is><t>${esc}</t></is></c>`;
+    return wsXml.replace(cRe,()=>replacement);  // arrow fn avoids $N backreference interpolation
   }
-  // Insert into existing row
+  // Insert new cell into existing row (or create the row)
   const rowNum=ref.match(/\d+$/)[0];
   const rRe=new RegExp(`(<row\\b[^>]*\\br="${rowNum}"\\b[^>]*>)([\\s\\S]*?)(</row>)`);
   const rM=wsXml.match(rRe);
   const newCell=`<c r="${ref}" t="inlineStr"><is><t>${esc}</t></is></c>`;
-  if(rM)return wsXml.replace(rRe,rM[1]+rM[2]+newCell+rM[3]);
+  // Arrow fn: template row content may contain $A$1-style formula refs which
+  // JavaScript would misinterpret as backreferences in a string replacement.
+  if(rM)return wsXml.replace(rRe,()=>rM[1]+rM[2]+newCell+rM[3]);
   return wsXml.replace('</sheetData>',`<row r="${rowNum}">${newCell}</row></sheetData>`);
 }
 
@@ -2558,13 +2564,26 @@ async function _buildStickerBuffer(params){
   if(!wsPath)wsPath=Object.keys(zip.files).find(p=>/^xl\/worksheets\/sheet\d+\.xml$/.test(p));
   if(!wsPath)throw new Error(`Worksheet "${sheetName}" not found`);
 
-  // 3. Minimal worksheet cleanup — only remove external-reference hooks that break
-  //    when we drop other sheets/rels. Leaves all cell data, formulas, extLst intact.
+  // 3. Minimal worksheet cleanup — remove external-reference hooks and strip formulas.
   let wsXml=await zip.file(wsPath).async('string');
   wsXml=wsXml.replace(/(<pageSetup\b[^>]*?)\s+r:id="[^"]*"/g,'$1');
   wsXml=wsXml.replace(/<(?:legacyDrawing|drawing|picture|tablePart)\b[^>]*\/>/g,'');
   wsXml=wsXml.replace(/<sheetViews>[\s\S]*?<\/sheetViews>/,
     '<sheetViews><sheetView workbookViewId="0"><selection activeCell="A1" sqref="A1"/></sheetView></sheetViews>');
+
+  // Strip ALL formula elements from the worksheet.
+  // RP template has shared formulas referencing sibling sheets we deleted;
+  // leaving them causes Excel to show repair/broken-ref dialogs.
+  // <f> elements never nest in OOXML, so non-greedy matching is safe here.
+  // Cached <v> values remain and Excel reads them as static data.
+  wsXml=wsXml.replace(/<f\b[^>]*>[\s\S]*?<\/f>/g,'');
+  wsXml=wsXml.replace(/<f\b[^>]*\/>/g,'');
+
+  // Also remove t="shared" / t="array" / t="str" type attributes from <c> elements
+  // whose formula was just stripped — convert them to plain value cells or inlineStr.
+  // Specifically: t="str" cells had cached string values in <v>; keep <v>, just remove type.
+  // t="shared"/"array" cells also had <v>; removing type makes them plain numeric/string.
+  wsXml=wsXml.replace(/(<c\b[^>]*)\s+t="(?:shared|array|str)"([^>]*>)/g,'$1$2');
 
   // Remove worksheet rels file — references printerSettings/drawings we just unhooked
   const wsRels=wsPath.replace('xl/worksheets/','xl/worksheets/_rels/').replace('.xml','.xml.rels');
