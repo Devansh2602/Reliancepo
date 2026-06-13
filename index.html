@@ -2589,11 +2589,50 @@ async function _buildStickerBuffer(params){
   const lastContentOff=hadExtraBlocks?(isRP?25:20):(blockSize-1);
   const lastUsedRow=blockStarts[cartons.length-1]+lastContentOff;
 
-  const preBuf=await zip.generateAsync({type:'arraybuffer'});
-  // 4. Rebuild minimal workbook.xml + rels (remove unused sheets, definedNames, etc.)
-  const fixedBuf=await fixWorkbook(preBuf,sheetName);
-  // 5. Trim rows beyond last used block
-  return await trimOutputRows(fixedBuf,lastUsedRow);
+  // Trim rows in-place before generating buffer (avoids a separate zip round-trip)
+  const trimmedXml=_trimXmlRows(wsXml,lastUsedRow);
+  zip.file(wsPath,trimmedXml);
+
+  // Remove all other worksheet files — RP template has 5 sheets; orphaned sheets
+  // cause "We found a problem" because Excel tries to parse every file in Content_Types.
+  Object.keys(zip.files)
+    .filter(p=>/^xl\/worksheets\/(sheet\d+\.xml|_rels\/sheet\d+\.xml\.rels)$/.test(p)&&p!==wsPath)
+    .forEach(p=>zip.remove(p));
+  // Remove other sheet rels too
+  Object.keys(zip.files)
+    .filter(p=>/^xl\/worksheets\/_rels\//.test(p))
+    .forEach(p=>zip.remove(p));
+
+  // Rebuild minimal workbook.xml + workbook.xml.rels referencing only our sheet
+  const sheetFile=wsPath.replace('xl/worksheets/','');
+  zip.file('xl/workbook.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`+
+    `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"`+
+    ` xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">`+
+    `<bookViews><workbookView xWindow="0" yWindow="0" windowWidth="14400" windowHeight="8400"/></bookViews>`+
+    `<sheets><sheet name="${sheetName}" sheetId="1" r:id="rId1"/></sheets>`+
+    `</workbook>`);
+  const hasStyles=!!zip.file('xl/styles.xml');
+  let relsBody=`<Relationship Id="rId1"`+
+    ` Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"`+
+    ` Target="worksheets/${sheetFile}"/>`;
+  if(hasStyles) relsBody+=`<Relationship Id="rId2"`+
+    ` Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles"`+
+    ` Target="styles.xml"/>`;
+  zip.file('xl/_rels/workbook.xml.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`+
+    `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`+
+    relsBody+`</Relationships>`);
+
+  // Clean Content_Types: remove Override entries for files no longer in zip
+  const ctFile=zip.file('[Content_Types].xml');
+  if(ctFile){
+    let ct=await ctFile.async('string');
+    ct=ct.replace(/<Override\s[^>]*PartName="\/([^"]+)"[^>]*\/>/g,(m,path)=>zip.file(path)?m:'');
+    zip.file('[Content_Types].xml',ct);
+  }
+
+  return zip.generateAsync({type:'arraybuffer'});
 }
 
 async function genSummary(){
