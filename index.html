@@ -2583,28 +2583,30 @@ async function _buildStickerBuffer(params){
     else    wsXml=_xmlFillDCBlock(wsXml,bs,ctn,totalCtns,invStr,poNum,styleName,pkgDateFmt,dcCode);
   });
 
-  zip.file(wsPath,wsXml);
-
   const hadExtraBlocks=blockStarts.length>cartons.length;
   const lastContentOff=hadExtraBlocks?(isRP?25:20):(blockSize-1);
   const lastUsedRow=blockStarts[cartons.length-1]+lastContentOff;
 
-  // Trim rows in-place before generating buffer (avoids a separate zip round-trip)
-  const trimmedXml=_trimXmlRows(wsXml,lastUsedRow);
-  zip.file(wsPath,trimmedXml);
+  // Trim rows in-place
+  zip.file(wsPath,_trimXmlRows(wsXml,lastUsedRow));
 
-  // Remove all other worksheet files — RP template has 5 sheets; orphaned sheets
-  // cause "We found a problem" because Excel tries to parse every file in Content_Types.
-  Object.keys(zip.files)
-    .filter(p=>/^xl\/worksheets\/(sheet\d+\.xml|_rels\/sheet\d+\.xml\.rels)$/.test(p)&&p!==wsPath)
-    .forEach(p=>zip.remove(p));
-  // Remove other sheet rels too
-  Object.keys(zip.files)
-    .filter(p=>/^xl\/worksheets\/_rels\//.test(p))
-    .forEach(p=>zip.remove(p));
-
-  // Rebuild minimal workbook.xml + workbook.xml.rels referencing only our sheet
+  // ── Whitelist approach: keep ONLY the files we need ──────────────────────
+  // RP template has 5 sheets plus tables/drawings/connections etc.
+  // Leaving ANY unrecognised file in the ZIP causes "We found a problem".
+  // Enumerate exactly what we want, then delete everything else.
   const sheetFile=wsPath.replace('xl/worksheets/','');
+  const keep=new Set([
+    wsPath,                       // target worksheet
+    'xl/workbook.xml',
+    'xl/_rels/workbook.xml.rels',
+    '_rels/.rels',
+    '[Content_Types].xml',
+  ]);
+  if(zip.file('xl/styles.xml'))   keep.add('xl/styles.xml');
+  if(zip.file('xl/theme/theme1.xml')) keep.add('xl/theme/theme1.xml');
+  Object.keys(zip.files).forEach(p=>{ if(!keep.has(p)) zip.remove(p); });
+
+  // Rebuild minimal workbook.xml
   zip.file('xl/workbook.xml',
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`+
     `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"`+
@@ -2612,25 +2614,49 @@ async function _buildStickerBuffer(params){
     `<bookViews><workbookView xWindow="0" yWindow="0" windowWidth="14400" windowHeight="8400"/></bookViews>`+
     `<sheets><sheet name="${sheetName}" sheetId="1" r:id="rId1"/></sheets>`+
     `</workbook>`);
-  const hasStyles=!!zip.file('xl/styles.xml');
+
+  // Rebuild minimal workbook.xml.rels
   let relsBody=`<Relationship Id="rId1"`+
     ` Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"`+
     ` Target="worksheets/${sheetFile}"/>`;
-  if(hasStyles) relsBody+=`<Relationship Id="rId2"`+
+  if(keep.has('xl/styles.xml')) relsBody+=
+    `<Relationship Id="rId2"`+
     ` Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles"`+
     ` Target="styles.xml"/>`;
+  if(keep.has('xl/theme/theme1.xml')) relsBody+=
+    `<Relationship Id="rId3"`+
+    ` Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme"`+
+    ` Target="theme/theme1.xml"/>`;
   zip.file('xl/_rels/workbook.xml.rels',
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`+
     `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`+
     relsBody+`</Relationships>`);
 
-  // Clean Content_Types: remove Override entries for files no longer in zip
-  const ctFile=zip.file('[Content_Types].xml');
-  if(ctFile){
-    let ct=await ctFile.async('string');
-    ct=ct.replace(/<Override\s[^>]*PartName="\/([^"]+)"[^>]*\/>/g,(m,path)=>zip.file(path)?m:'');
-    zip.file('[Content_Types].xml',ct);
-  }
+  // Rebuild _rels/.rels (package-level) pointing to workbook
+  zip.file('_rels/.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`+
+    `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`+
+    `<Relationship Id="rId1"`+
+    ` Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"`+
+    ` Target="xl/workbook.xml"/>`+
+    `</Relationships>`);
+
+  // Rebuild [Content_Types].xml with only what's in the zip
+  const wsContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml';
+  const wbContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml';
+  const stylesContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml';
+  const themeContentType='application/vnd.openxmlformats-officedocument.theme+xml';
+  let overrides=`<Override PartName="/xl/workbook.xml" ContentType="${wbContentType}"/>`+
+    `<Override PartName="/${wsPath}" ContentType="${wsContentType}"/>`;
+  if(keep.has('xl/styles.xml'))       overrides+=`<Override PartName="/xl/styles.xml" ContentType="${stylesContentType}"/>`;
+  if(keep.has('xl/theme/theme1.xml')) overrides+=`<Override PartName="/xl/theme/theme1.xml" ContentType="${themeContentType}"/>`;
+  zip.file('[Content_Types].xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`+
+    `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">`+
+    `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>`+
+    `<Default Extension="xml" ContentType="application/xml"/>`+
+    overrides+
+    `</Types>`);
 
   return zip.generateAsync({type:'arraybuffer'});
 }
