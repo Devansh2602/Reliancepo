@@ -2242,6 +2242,9 @@ function _rpBlock(ws,sr,ctn,totalCtns,inv,po,pkgDate,cfg,style){
   // R1-2: HANDLING UNIT LABEL
   mg(sr,1,sr+1,8);
   Object.assign(cl(sr,1),{value:'HANDLING UNIT LABEL',font:fn(24,1),alignment:al('center','middle'),border:{top:M,left:M,bottom:M,right:M}});
+  // Row 2 side borders (ExcelJS doesn't auto-propagate merge side borders to interior rows)
+  cl(sr+1,1).border={left:M};
+  cl(sr+1,8).border={right:M};
   // R3: Vendor | Invoice
   mg(sr+2,1,sr+2,4);mg(sr+2,5,sr+2,8);
   Object.assign(cl(sr+2,1),{value:'Vendor Number :  10337044',font:fn(12,1),alignment:al('left'),border:{top:M,left:M,right:M}});
@@ -2265,9 +2268,10 @@ function _rpBlock(ws,sr,ctn,totalCtns,inv,po,pkgDate,cfg,style){
   // R8: City
   Object.assign(cl(sr+7,1),{value:'ANDHERI WEST ,MUMBAI',font:fn(11),alignment:al('left'),border:{left:M}});
   cl(sr+7,8).border={right:M};
-  // R9: State
-  Object.assign(cl(sr+8,1),{value:'MAHARASHTRA -400053',font:fn(11),alignment:al('left'),border:{left:M}});
-  cl(sr+8,8).border={right:M};
+  // R9: State — bottom:M across all 8 cols closes the FROM section box
+  Object.assign(cl(sr+8,1),{value:'MAHARASHTRA -400053',font:fn(11),alignment:al('left'),border:{left:M,bottom:M}});
+  for(let c=2;c<=7;c++)cl(sr+8,c).border={bottom:M};
+  cl(sr+8,8).border={right:M,bottom:M};
   // R10: To (DC code) — both panels need borders
   mg(sr+9,1,sr+9,4);mg(sr+9,5,sr+9,8);
   Object.assign(cl(sr+9,1),{value:cfg.to,font:fn(12,1),alignment:al('left'),border:{top:M,left:M,right:M}});
@@ -2314,7 +2318,12 @@ function _rpBlock(ws,sr,ctn,totalCtns,inv,po,pkgDate,cfg,style){
   cl(sr+17,5).border={left:M};
   cl(sr+17,8).border={right:M};
   cl(sr+18,1).border={left:M,bottom:M};
+  cl(sr+18,2).border={bottom:M};
+  cl(sr+18,3).border={bottom:M};
+  cl(sr+18,4).border={bottom:M};
   cl(sr+18,5).border={left:M,bottom:M};
+  cl(sr+18,6).border={bottom:M};
+  cl(sr+18,7).border={bottom:M};
   cl(sr+18,8).border={right:M,bottom:M};
   // R20: Header row — right border is thin throughout (matches reference)
   mg(sr+19,1,sr+19,2);mg(sr+19,3,sr+19,4);mg(sr+19,5,sr+19,6);mg(sr+19,7,sr+19,8);
