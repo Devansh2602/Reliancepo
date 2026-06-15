@@ -1466,9 +1466,10 @@ function fillRPPLSheet(wb,P){
     totalPcs+=packQty*ppk;
     SIZES.forEach(sz=>totS[sz]+=packQty);
     // col3 header = RP PRODUCT_CODE (looked up by RP DESCRPTION + Colour from RP rows)
-    const masterArt=_rpArtMap[`${it.rpDescCol}|${it.colour}`]||it.artS||it.artM||it.artL||it.artXL||it.artXXL||'';
+    const _rpd=String(it.rpDescCol||'').trim(),_col=String(it.colour||'').trim();
+    const masterArt=_rpArtMap[`${_rpd}|${_col}`]||it.artS||it.artM||it.artL||it.artXL||it.artXXL||'';
     // col3 size rows = DC PRODUCT_CODE looked up by RP DESCRPTION + Colour + size column
-    const sizeArt=sz=>_dcArtMap[`${it.rpDescCol}|${it.colour}|${sz}`]||masterArt;
+    const sizeArt=sz=>_dcArtMap[`${_rpd}|${_col}|${sz}`]||masterArt;
     // col4 = RP description = part before first ', ' in PRODUCT_DESCRIPTION (e.g. "KRTS-APWN26-GETKRTSFUT6125")
     const hdrDesc=it.pdescS||it.prodDesc||it.desc||'';
     const sizeDesc=()=>it.rpDescCol||it.rpDesc||it.desc||'';
@@ -2104,8 +2105,9 @@ function computeRPCartons(items,packsPerCtn){
   });
   items.forEach(it=>{
     const pq=it.S||it.M||it.L||it.XL||it.XXL||0; if(!pq)return;
-    const masterArt=rpMap[`${it.rpDescCol}|${it.colour}`]||it.artS||it.artM||it.artL||it.artXL||it.artXXL||'';
-    const sizeArt=sz=>dcMap[`${it.rpDescCol}|${it.colour}|${sz}`]||masterArt;
+    const _rpd=String(it.rpDescCol||'').trim(),_col=String(it.colour||'').trim();
+    const masterArt=rpMap[`${_rpd}|${_col}`]||it.artS||it.artM||it.artL||it.artXL||it.artXXL||'';
+    const sizeArt=sz=>dcMap[`${_rpd}|${_col}|${sz}`]||masterArt;
     const packEan=masterArt,perSizeEans={};
     SZ.forEach(sz=>{perSizeEans[sz]=sizeArt(sz);});
     const mk=packs=>{
