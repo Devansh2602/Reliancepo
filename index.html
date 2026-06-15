@@ -2251,7 +2251,7 @@ function _rpBlock(ws,sr,ctn,totalCtns,inv,po,pkgDate,cfg,style){
   Object.assign(cl(sr+2,5),{value:`Invoice No:- ${inv}`,font:fn(11),alignment:al('left'),border:{top:M,right:M}});
   // R4: FROM | PO Number
   mg(sr+3,1,sr+3,4);mg(sr+3,5,sr+3,8);
-  Object.assign(cl(sr+3,1),{value:'FROM:',font:fn(11,1),alignment:al('left'),border:{left:M}});
+  Object.assign(cl(sr+3,1),{value:'FROM:',font:fn(11,1),alignment:al('left'),border:{left:M,right:M}});
   Object.assign(cl(sr+3,5),{value:`Po Number :-  ${po}`,font:fn(11),alignment:al('left'),border:{right:M}});
   // R5: Company | Style
   mg(sr+4,1,sr+4,4);mg(sr+4,5,sr+4,8);
@@ -2267,10 +2267,11 @@ function _rpBlock(ws,sr,ctn,totalCtns,inv,po,pkgDate,cfg,style){
   cl(sr+6,5).border={right:M};
   // R8: City
   Object.assign(cl(sr+7,1),{value:'ANDHERI WEST ,MUMBAI',font:fn(11),alignment:al('left'),border:{left:M}});
+  cl(sr+7,4).border={right:M};
   cl(sr+7,8).border={right:M};
   // R9: State — bottom:M across all 8 cols closes the FROM section box
   Object.assign(cl(sr+8,1),{value:'MAHARASHTRA -400053',font:fn(11),alignment:al('left'),border:{left:M,bottom:M}});
-  for(let c=2;c<=7;c++)cl(sr+8,c).border={bottom:M};
+  for(let c=2;c<=7;c++)cl(sr+8,c).border=c===4?{bottom:M,right:M}:{bottom:M};
   cl(sr+8,8).border={right:M,bottom:M};
   // R10: To (DC code) — both panels need borders
   mg(sr+9,1,sr+9,4);mg(sr+9,5,sr+9,8);
@@ -2284,6 +2285,7 @@ function _rpBlock(ws,sr,ctn,totalCtns,inv,po,pkgDate,cfg,style){
   cl(sr+10,8).border={right:M};
   // R12: addr[1] | Gross Weight
   Object.assign(cl(sr+11,1),{value:cfg.addr[1],font:fn(11),alignment:al('left'),border:{left:M}});
+  cl(sr+11,4).border={right:M};
   Object.assign(cl(sr+11,5),{value:'Gross Weight :',font:fn(11),border:{left:M}});
   Object.assign(cl(sr+11,7),{value:12.75,font:fn(11),alignment:al('center','middle')});
   cl(sr+11,8).border={right:M};
@@ -2308,6 +2310,8 @@ function _rpBlock(ws,sr,ctn,totalCtns,inv,po,pkgDate,cfg,style){
   mg(sr+15,1,sr+15,4);
   Object.assign(cl(sr+15,1),{value:cfg.addr[5],font:fn(11),alignment:al('left'),border:{left:M,right:M,bottom:M}});
   cl(sr+15,5).border={left:M,bottom:M};
+  cl(sr+15,6).border={bottom:M};
+  cl(sr+15,7).border={bottom:M};
   cl(sr+15,8).border={right:M,bottom:M};
   // R17-19: CARTON NUMBER (3-row merged spans)
   mg(sr+16,1,sr+18,4);mg(sr+16,5,sr+18,8);
