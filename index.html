@@ -2144,7 +2144,7 @@ async function _buildStickerXL({invStr,poNum,isRP,pkgDate,cfg,cartons,totalCtns,
   const wb=new ExcelJS.Workbook();
   const ws=wb.addWorksheet(cfg.sh);
   // Column widths — matched exactly to reference templates
-  (isRP?[8,8,8,12,8,5.4,11.6,8]:[8,10.5,8,27.2,15.8,16.2,8,8])
+  (isRP?[8,8,8,12,8,5.4,11.6,8]:[16,8,8,12,16,9,8,8])
     .forEach((w,i)=>ws.getColumn(i+1).width=w);
   const bs=isRP?27:23, ro=cfg.rowOff||0;
   cartons.forEach((ctn,idx)=>{
@@ -2162,73 +2162,109 @@ function _dcBlock(ws,sr,ctn,totalCtns,inv,po,pkgDate,cfg,style){
   const al=(h,v)=>({horizontal:h||'left',vertical:v||undefined});
   const cl=(r,c)=>ws.getCell(r,c);
   const mg=(r1,c1,r2,c2)=>ws.mergeCells(r1,c1,r2,c2);
-  // Row heights (offset 0-22)
-  [null,16,21,19,19,19,19,19,20,21,21,19,19,15,19,20,null,null,16,19,20,null,16]
+  // Row heights (offsets 0-20) — 21-row block content
+  [15,15.75,16,16,16,16,16,16,17,16,16,16,16,15,16,17,15,15,15.75,16,17]
     .forEach((h,i)=>{if(h)ws.getRow(sr+i).height=h;});
-  // R1-2: HANDLING UNIT LABEL
+  // R1-2: HANDLING UNIT LABEL (2-row merge)
   mg(sr,1,sr+1,8);
-  Object.assign(cl(sr,1),{value:'HANDLING UNIT LABEL',font:fn(26,1),alignment:al('center','middle'),border:{top:M,left:M,bottom:M,right:M}});
+  Object.assign(cl(sr,1),{value:'HANDLING UNIT LABEL',font:fn(24,1),alignment:al('center','middle'),border:{top:M,left:M,bottom:M,right:M}});
+  cl(sr+1,1).border={left:M};
+  cl(sr+1,8).border={right:M};
   // R3: Vendor | Invoice
   mg(sr+2,1,sr+2,4);mg(sr+2,5,sr+2,8);
-  Object.assign(cl(sr+2,1),{value:'Vendor Number :  10337044',font:fn(16,1),alignment:al('left'),border:{top:M,left:M,right:M}});
-  Object.assign(cl(sr+2,5),{value:`Invoice No:- ${inv}`,font:fn(14),alignment:al('left'),border:{top:M,left:M,right:M}});
+  Object.assign(cl(sr+2,1),{value:'Vendor Number :  10337044',font:fn(12,1),alignment:al('left'),border:{top:M,left:M,right:M}});
+  Object.assign(cl(sr+2,5),{value:`Invoice No:-  ${inv}`,font:fn(12),alignment:al('left'),border:{top:M,right:M}});
   // R4: FROM | PO Number
   mg(sr+3,1,sr+3,4);mg(sr+3,5,sr+3,8);
-  Object.assign(cl(sr+3,1),{value:'FROM:',font:fn(14,1),alignment:al('left'),border:{left:M}});
-  Object.assign(cl(sr+3,5),{value:`Po Number :- ${po}`,font:fn(14),alignment:al('left'),border:{left:M,right:M}});
+  Object.assign(cl(sr+3,1),{value:'FROM:',font:fn(12,1),alignment:al('left'),border:{left:M,right:M}});
+  Object.assign(cl(sr+3,5),{value:`Po Number :- ${po}`,font:fn(12),alignment:al('left'),border:{right:M}});
   // R5: Company | Style
   mg(sr+4,1,sr+4,4);mg(sr+4,5,sr+4,8);
-  Object.assign(cl(sr+4,1),{value:'UNITED TEXTILE MILLS PVT LTD ',font:fn(14,1),alignment:al('left'),border:{left:M,right:M}});
-  Object.assign(cl(sr+4,5),{value:`Style:- ${style}`,font:fn(14),alignment:al('left'),border:{left:M,right:M}});
+  Object.assign(cl(sr+4,1),{value:'UNITED TEXTILE MILLS PVT LTD ',font:fn(12,1),alignment:al('left'),border:{left:M,right:M}});
+  Object.assign(cl(sr+4,5),{value:`Style:- ${style}`,font:fn(12),alignment:al('left'),border:{right:M}});
   // R6: Address1 | Po Type DC
   mg(sr+5,1,sr+5,4);mg(sr+5,5,sr+5,8);
-  Object.assign(cl(sr+5,1),{value:'5TH, B 502, DHANASHREE HEIGHTS',font:fn(14),alignment:al('left'),border:{left:M,right:M}});
-  Object.assign(cl(sr+5,5),{value:'Po Type:-   DC',font:fn(14),alignment:al('left'),border:{left:M,right:M}});
-  // R7: Address2
+  Object.assign(cl(sr+5,1),{value:'5TH, B 502, DHANASHREE HEIGHTS',font:fn(12),alignment:al('left'),border:{left:M,right:M}});
+  Object.assign(cl(sr+5,5),{value:'Po Type:-   DC',font:fn(12),alignment:al('left'),border:{right:M}});
+  // R7: Address2 — right panel has right border only
   mg(sr+6,1,sr+6,4);
-  Object.assign(cl(sr+6,1),{value:'SANGAM CHS B WING AZAD NAGAR',font:fn(14),alignment:al('left'),border:{left:M,right:M}});
-  // R8-9: City, State
-  Object.assign(cl(sr+7,1),{value:'ANDHERI WEST ,MUMBAI',font:fn(14),alignment:al('left'),border:{left:M}});
-  Object.assign(cl(sr+8,1),{value:'MAHARASHTRA -400053',font:fn(14),alignment:al('left'),border:{left:M}});
-  // R10: To (DC code)
+  Object.assign(cl(sr+6,1),{value:'SANGAM CHS B WING AZAD NAGAR',font:fn(12),alignment:al('left'),border:{left:M,right:M}});
+  cl(sr+6,8).border={right:M};
+  // R8: City — col4 right:M, col8 right:M
+  Object.assign(cl(sr+7,1),{value:'ANDHERI WEST ,MUMBAI',font:fn(12),alignment:al('left'),border:{left:M}});
+  cl(sr+7,4).border={right:M};
+  cl(sr+7,8).border={right:M};
+  // R9: State — close FROM section with bottom:M across all 8 cols
+  Object.assign(cl(sr+8,1),{value:'MAHARASHTRA -400053',font:fn(12),alignment:al('left'),border:{left:M,bottom:M}});
+  for(let c=2;c<=7;c++)cl(sr+8,c).border=c===4?{bottom:M,right:M}:{bottom:M};
+  cl(sr+8,8).border={right:M,bottom:M};
+  // R10: To (DC code) — both panels with top border
   mg(sr+9,1,sr+9,4);mg(sr+9,5,sr+9,8);
-  Object.assign(cl(sr+9,1),{value:cfg.to,font:fn(16),alignment:al('left'),border:{top:M,left:M,right:M}});
+  Object.assign(cl(sr+9,1),{value:cfg.to,font:fn(12,1),alignment:al('left'),border:{top:M,left:M,right:M}});
+  cl(sr+9,5).border={top:M,left:M,right:M};
   // R11: Reliance Retail | Net Weight
   mg(sr+10,1,sr+10,4);
-  Object.assign(cl(sr+10,1),{value:'Reliance Retail Limited',font:fn(16,1),alignment:al('left'),border:{left:M,right:M}});
-  Object.assign(cl(sr+10,5),{value:'Net Weight : ',font:fn(14),border:{left:M}});
-  Object.assign(cl(sr+10,6),{value:6.75,font:fn(14),alignment:al('center','middle')});
-  // R12: DC addr[1] | Gross Weight
-  Object.assign(cl(sr+11,1),{value:cfg.addr[1],font:fn(14),alignment:al('left'),border:{left:M}});
-  Object.assign(cl(sr+11,5),{value:'Gross Weight :',font:fn(14),border:{left:M}});
-  Object.assign(cl(sr+11,6),{value:8.25,font:fn(14),alignment:al('center','middle')});
-  // R13: DC addr[2] | Total Qty
+  Object.assign(cl(sr+10,1),{value:'Reliance Retail Limited',font:fn(12,1),alignment:al('left'),border:{left:M,right:M}});
+  Object.assign(cl(sr+10,5),{value:'Net Weight : ',font:fn(12),border:{left:M}});
+  Object.assign(cl(sr+10,6),{value:6.75,font:fn(12),alignment:al('center','middle')});
+  cl(sr+10,8).border={right:M};
+  // R12: addr[1] | Gross Weight
+  Object.assign(cl(sr+11,1),{value:cfg.addr[1],font:fn(12),alignment:al('left'),border:{left:M}});
+  cl(sr+11,4).border={right:M};
+  Object.assign(cl(sr+11,5),{value:'Gross Weight :',font:fn(12),border:{left:M}});
+  Object.assign(cl(sr+11,6),{value:8.25,font:fn(12),alignment:al('center','middle')});
+  cl(sr+11,8).border={right:M};
+  // R13: addr[2] | Total Qty
   mg(sr+12,1,sr+12,4);
-  Object.assign(cl(sr+12,1),{value:cfg.addr[2],font:fn(14),alignment:al('left'),border:{left:M,right:M}});
-  Object.assign(cl(sr+12,5),{value:'Total Qty  :  ',font:fn(14),border:{left:M}});
-  Object.assign(cl(sr+12,6),{value:ctn.qty,font:fn(14),alignment:al('center','middle')});
-  // R14: DC addr[3] | Pkg Date (full medium box)
+  Object.assign(cl(sr+12,1),{value:cfg.addr[2],font:fn(12),alignment:al('left'),border:{left:M,right:M}});
+  Object.assign(cl(sr+12,5),{value:'Total Qty  :  ',font:fn(12),border:{left:M}});
+  Object.assign(cl(sr+12,6),{value:ctn.qty,font:fn(12),alignment:al('center','middle')});
+  cl(sr+12,8).border={right:M};
+  // R14: addr[3] | Pkg Date
   mg(sr+13,1,sr+13,4);mg(sr+13,5,sr+13,8);
-  Object.assign(cl(sr+13,1),{value:cfg.addr[3],font:fn(14),alignment:{horizontal:'left',wrapText:true},border:{left:M,right:M}});
-  Object.assign(cl(sr+13,5),{value:`Pkg Date : ${pkgDate}`,font:fn(14),alignment:al('left'),border:{top:M,left:M,bottom:M,right:M}});
-  // R15: DC addr[4]
-  Object.assign(cl(sr+14,1),{value:cfg.addr[4],font:fn(14),alignment:al('left'),border:{left:M}});
-  // R16: DC addr[5] — last address line, bottom border
+  Object.assign(cl(sr+13,1),{value:cfg.addr[3],font:fn(12),alignment:{horizontal:'left',wrapText:true},border:{left:M,right:M}});
+  Object.assign(cl(sr+13,5),{value:`Pkg Date : ${pkgDate}`,font:fn(12),alignment:al('left'),border:{left:M,right:M}});
+  // R15: addr[4]
+  mg(sr+14,1,sr+14,4);
+  Object.assign(cl(sr+14,1),{value:cfg.addr[4],font:fn(12),alignment:al('left'),border:{left:M,right:M}});
+  cl(sr+14,5).border={left:M};
+  cl(sr+14,8).border={right:M};
+  // R16: addr[5] — close address box with bottom:M on left panel; right panel side borders
   mg(sr+15,1,sr+15,4);
-  Object.assign(cl(sr+15,1),{value:cfg.addr[5],font:fn(14),alignment:al('left'),border:{left:M,right:M,bottom:M}});
-  // R17-19: CARTON NUMBER (3-row merged spans)
+  Object.assign(cl(sr+15,1),{value:cfg.addr[5],font:fn(12),alignment:al('left'),border:{left:M,right:M,bottom:M}});
+  cl(sr+15,2).border={bottom:M};
+  cl(sr+15,3).border={bottom:M};
+  cl(sr+15,4).border={bottom:M};
+  cl(sr+15,5).border={left:M};
+  cl(sr+15,8).border={right:M};
+  // R17-19: CARTON NUMBER (3-row merge)
   mg(sr+16,1,sr+18,4);mg(sr+16,5,sr+18,8);
-  Object.assign(cl(sr+16,1),{value:'CARTON NUMBER ',font:fn(14,1),alignment:al('center','middle'),border:{top:M,left:M,bottom:M,right:M}});
-  Object.assign(cl(sr+16,5),{value:`${String(ctn.ctnNo).padStart(2,'0')} OF ${totalCtns}`,font:fn(14,1),alignment:al('center','middle'),border:{top:M,left:M,bottom:M,right:M}});
-  // R20: Header row
+  Object.assign(cl(sr+16,1),{value:'CARTON NUMBER ',font:fn(12,1),alignment:al('center','middle'),border:{top:M,left:M,bottom:M,right:M}});
+  Object.assign(cl(sr+16,5),{value:`${String(ctn.ctnNo).padStart(2,'0')} OF ${totalCtns}`,font:fn(12,1),alignment:al('center','middle'),border:{top:M,left:M,bottom:M,right:M}});
+  // Interior rows of Carton merge — explicit side borders
+  cl(sr+17,1).border={left:M};
+  cl(sr+17,4).border={right:M};
+  cl(sr+17,5).border={left:M};
+  cl(sr+17,8).border={right:M};
+  cl(sr+18,1).border={left:M,bottom:M};
+  cl(sr+18,2).border={bottom:M};
+  cl(sr+18,3).border={bottom:M};
+  cl(sr+18,4).border={bottom:M,right:M};
+  cl(sr+18,5).border={left:M,bottom:M};
+  cl(sr+18,6).border={bottom:M};
+  cl(sr+18,7).border={bottom:M};
+  cl(sr+18,8).border={right:M,bottom:M};
+  // R20: Header row — top:M, left:M, right:M (no bottom); explicit right-cell borders
   mg(sr+19,1,sr+19,2);mg(sr+19,3,sr+19,4);mg(sr+19,5,sr+19,6);mg(sr+19,7,sr+19,8);
-  [['Article No',1],['Colour',3],['Size',5],['Quantity',7]].forEach(([txt,col])=>{
-    Object.assign(cl(sr+19,col),{value:txt,font:fn(14),alignment:al('center'),border:{top:M,left:M,bottom:T,right:M}});
+  [['Article No',1],['Colour',3],['SIZE',5],['Quantity',7]].forEach(([txt,col])=>{
+    Object.assign(cl(sr+19,col),{value:txt,font:fn(12),alignment:al('center'),border:{top:M,left:M,right:M}});
+    cl(sr+19,col+1).border={top:M,right:M};
   });
-  // R21: Data row
+  // R21: Data row — thin top, medium bottom; explicit right-cell borders
   mg(sr+20,1,sr+20,2);mg(sr+20,3,sr+20,4);mg(sr+20,5,sr+20,6);mg(sr+20,7,sr+20,8);
   [[String(ctn.artEan),1],[ctn.colour,3],[ctn.size,5],[String(ctn.qty),7]].forEach(([val,col])=>{
-    Object.assign(cl(sr+20,col),{value:val,font:fn(14),alignment:al('center'),border:{top:T,left:M,bottom:M,right:M}});
+    Object.assign(cl(sr+20,col),{value:val,font:fn(12),alignment:al('center'),border:{top:T,left:M,bottom:M,right:M}});
+    cl(sr+20,col+1).border={top:T,bottom:M,right:M};
   });
 }
 
