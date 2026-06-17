@@ -1444,8 +1444,8 @@ function fillRPPLSheet(wb,P){
   (typeof ALL!=='undefined'?ALL:FD||[]).forEach(r=>{
     const _rpd=String(r['RP DESCRPTION']||'').trim();
     const _col=String(r['Colour']||r._colour||'').trim();
-    const _pc=String(r['PRODUCT_CODE']||'');
-    const _ot=String(r['Order type']||'');
+    const _pc=String(r['PRODUCT_CODE']||'').trim();
+    const _ot=String(r['Order type']||'').trim().toUpperCase();
     if(!_rpd||!_pc||_rpd==='NOT FOUND')return;
     if(_ot==='RP'){
       const k=`${_rpd}|${_col}`;
@@ -2098,7 +2098,7 @@ function computeRPCartons(items,packsPerCtn){
   const rpMap={},dcMap={};
   (typeof ALL!=='undefined'?ALL:FD||[]).forEach(r=>{
     const rpd=String(r['RP DESCRPTION']||'').trim(),col=String(r['Colour']||r._colour||'').trim();
-    const pc=String(r['PRODUCT_CODE']||''),ot=String(r['Order type']||'');
+    const pc=String(r['PRODUCT_CODE']||'').trim(),ot=String(r['Order type']||'').trim().toUpperCase();
     if(!rpd||!pc||rpd==='NOT FOUND')return;
     if(ot==='RP'){const k=`${rpd}|${col}`;if(!rpMap[k])rpMap[k]=pc;}
     else if(ot==='DC'){SZ.forEach(sz=>{if((+r[sz]||0)>0){const k=`${rpd}|${col}|${sz}`;if(!dcMap[k])dcMap[k]=pc;}});}
