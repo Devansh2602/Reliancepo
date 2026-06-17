@@ -946,7 +946,7 @@ function openModal(){
     const en=String(r['EAN_NO']||'');
     const s=+r.S||0,m=+r.M||0,l=+r.L||0,xl=+r.XL||0,xxl=+r.XXL||0;
     const pd=String(r['PRODUCT_DESCRIPTION']||'');
-    const _isRPRow=String(r['Order type']||'').trim().toUpperCase()==='RP';
+    const _isRPRow=/^(RP|RATIO)$/i.test(String(r['Order type']||'').trim());
     const _rpdVal=String(r['RP DESCRPTION']||'').trim();
     // extract RP description = everything before first ', '
     if(pd&&!im[k].rpDesc)im[k].rpDesc=pd.split(', ')[0]||pd;
@@ -1445,26 +1445,34 @@ function fillRPPLSheet(wb,P){
   // fill per item (typically one item for RP)
   const SIZES=['S','M','L','XL','XXL'];
   const artK={S:'artS',M:'artM',L:'artL',XL:'artXL',XXL:'artXXL'};
-  // pre-build indexes from ALL rows (not FD — FD is filtered to selected PO only, DC rows excluded)
-  // _rpArtMap: "{rpDesc}|{colour}" → RP PRODUCT_CODE (from RP rows)
-  // _dcArtMap: "{rpDesc}|{colour}|{size}" → DC PRODUCT_CODE (from DC rows, per size column)
-  const _rpArtMap={},_dcArtMap={};
+  // pre-build indexes from ALL rows
+  // _rpArtMap: "{rpDesc}|{colour}" → RP PRODUCT_CODE
+  // _nameRpMap: "{styleName}|{colour}" → RP PRODUCT_CODE  (direct fallback when rpDesc blank)
+  // _dcArtMap: "{rpDesc}|{colour}|{size}" → DC PRODUCT_CODE
+  const _rpArtMap={},_nameRpMap={},_dcArtMap={};
   (typeof ALL!=='undefined'?ALL:FD||[]).forEach(r=>{
     const _rpd=String(r['RP DESCRPTION']||'').trim();
     const _col=String(r['Colour']||r._colour||'').trim();
     const _pc=String(r['PRODUCT_CODE']||'').trim();
+    const _nm=String(r._name||r['SKU']||'').trim();
     const _ot=String(r['Order type']||'').trim().toUpperCase();
-    if(!_rpd||!_pc||_rpd==='NOT FOUND')return;
-    if(_ot==='RP'){
-      const k=`${_rpd}|${_col}`;
-      if(!_rpArtMap[k])_rpArtMap[k]=_pc;
+    const _isRPType=_ot==='RP'||_ot==='RATIO';
+    if(!_pc)return;
+    if(_isRPType){
+      if(_rpd&&_rpd!=='NOT FOUND'){
+        const k=`${_rpd}|${_col}`;if(!_rpArtMap[k])_rpArtMap[k]=_pc;
+      }
+      // always index by name+colour so we find it even when rpDesc is blank/NOT FOUND
+      if(_nm){const kn=`${_nm}|${_col}`;if(!_nameRpMap[kn])_nameRpMap[kn]=_pc;}
     } else if(_ot==='DC'){
-      ['S','M','L','XL','XXL'].forEach(sz=>{
-        if((+r[sz]||0)>0){const k=`${_rpd}|${_col}|${sz}`;if(!_dcArtMap[k])_dcArtMap[k]=_pc;}
-      });
+      if(_rpd&&_rpd!=='NOT FOUND'){
+        ['S','M','L','XL','XXL'].forEach(sz=>{
+          if((+r[sz]||0)>0){const k=`${_rpd}|${_col}|${sz}`;if(!_dcArtMap[k])_dcArtMap[k]=_pc;}
+        });
+      }
     }
   });
-  console.log('[RP ART] rpMap keys:',Object.keys(_rpArtMap).length,'dcMap keys:',Object.keys(_dcArtMap).length);
+  console.log('[RP ART] rpMap:',Object.keys(_rpArtMap).length,'nameMap:',Object.keys(_nameRpMap).length,'dcMap:',Object.keys(_dcArtMap).length);
   let dr=26,totalCtns=0,totalPcs=0;
   const totS={S:0,M:0,L:0,XL:0,XXL:0};
   items.forEach(it=>{
@@ -1474,15 +1482,16 @@ function fillRPPLSheet(wb,P){
     totalCtns+=fullCtns+(remPacks>0?1:0);
     totalPcs+=packQty*ppk;
     SIZES.forEach(sz=>totS[sz]+=packQty);
-    // col3 header = RP PRODUCT_CODE (looked up by RP DESCRPTION + Colour from RP rows)
+    // col3 header = RP PRODUCT_CODE
     const _rpd=String(it.rpDescCol||'').trim(),_col=String(it.colour||'').trim();
-    const _rpd2=String(it.rpDesc||'').trim(); // fallback key from PRODUCT_DESCRIPTION prefix
-    const _mapHit=_rpArtMap[`${_rpd}|${_col}`];
-    const _rpd2Hit=_rpd2&&_rpd2!==_rpd&&_rpArtMap[`${_rpd2}|${_col}`];
-    console.log(`[RP ART] item="${it.desc}" colour="${_col}" rpDescCol="${_rpd}" rpDesc="${_rpd2}" mapHit="${_mapHit||''}" rpd2Hit="${_rpd2Hit||''}" artS="${it.artS}" masterCode="${it.masterCode}"`);
-    const masterArt=_mapHit||_rpd2Hit
+    const _rpd2=String(it.rpDesc||'').trim();
+    const _nm=String(it.desc||'').trim();
+    const masterArt=_rpArtMap[`${_rpd}|${_col}`]
+      ||(_rpd2&&_rpd2!==_rpd&&_rpArtMap[`${_rpd2}|${_col}`])
+      ||_nameRpMap[`${_nm}|${_col}`]
       ||it.artS||it.artM||it.artL||it.artXL||it.artXXL||it.masterCode||'';
-    // col3 size rows = DC PRODUCT_CODE looked up by RP DESCRPTION + Colour + size column
+    console.log(`[RP ART] "${_nm}"|"${_col}" rpd="${_rpd}" → art="${masterArt}"`);
+    // col3 size rows = DC PRODUCT_CODE
     const sizeArt=sz=>_dcArtMap[`${_rpd}|${_col}|${sz}`]
       ||(_rpd2&&_rpd2!==_rpd&&_dcArtMap[`${_rpd2}|${_col}|${sz}`])
       ||masterArt;
@@ -2111,24 +2120,30 @@ function computeDCCartons(items,ppb){
 function computeRPCartons(items,packsPerCtn){
   const SZ=['S','M','L','XL','XXL'];
   const cartons=[]; let ctnNo=0;
-  const rpMap={},dcMap={};
+  const rpMap={},nameRpMap={},dcMap={};
   (typeof ALL!=='undefined'?ALL:FD||[]).forEach(r=>{
     const rpd=String(r['RP DESCRPTION']||'').trim(),col=String(r['Colour']||r._colour||'').trim();
     const pc=String(r['PRODUCT_CODE']||'').trim(),ot=String(r['Order type']||'').trim().toUpperCase();
-    if(!rpd||!pc||rpd==='NOT FOUND')return;
-    if(ot==='RP'){const k=`${rpd}|${col}`;if(!rpMap[k])rpMap[k]=pc;}
-    else if(ot==='DC'){SZ.forEach(sz=>{if((+r[sz]||0)>0){const k=`${rpd}|${col}|${sz}`;if(!dcMap[k])dcMap[k]=pc;}});}
+    const nm=String(r._name||r['SKU']||'').trim();
+    const isRPType=ot==='RP'||ot==='RATIO';
+    if(!pc)return;
+    if(isRPType){
+      if(rpd&&rpd!=='NOT FOUND'){const k=`${rpd}|${col}`;if(!rpMap[k])rpMap[k]=pc;}
+      if(nm){const kn=`${nm}|${col}`;if(!nameRpMap[kn])nameRpMap[kn]=pc;}
+    } else if(ot==='DC'){
+      if(rpd&&rpd!=='NOT FOUND'){SZ.forEach(sz=>{if((+r[sz]||0)>0){const k=`${rpd}|${col}|${sz}`;if(!dcMap[k])dcMap[k]=pc;}});}
+    }
   });
-  console.log('[RP STICKER] rpMap keys:',Object.keys(rpMap).length,'dcMap keys:',Object.keys(dcMap).length);
+  console.log('[RP STICKER] rpMap:',Object.keys(rpMap).length,'nameMap:',Object.keys(nameRpMap).length);
   items.forEach(it=>{
     const pq=it.S||it.M||it.L||it.XL||it.XXL||0; if(!pq)return;
     const _rpd=String(it.rpDescCol||'').trim(),_col=String(it.colour||'').trim();
-    const _rpd2=String(it.rpDesc||'').trim(); // fallback key from PRODUCT_DESCRIPTION prefix
-    const _mapHit=rpMap[`${_rpd}|${_col}`];
-    console.log(`[RP STICKER] item="${it.desc}" colour="${_col}" rpDescCol="${_rpd}" rpDesc="${_rpd2}" mapHit="${_mapHit||''}" artS="${it.artS}" masterCode="${it.masterCode}"`);
-    const masterArt=_mapHit
+    const _rpd2=String(it.rpDesc||'').trim(),_nm=String(it.desc||'').trim();
+    const masterArt=rpMap[`${_rpd}|${_col}`]
       ||(_rpd2&&_rpd2!==_rpd&&rpMap[`${_rpd2}|${_col}`])
+      ||nameRpMap[`${_nm}|${_col}`]
       ||it.artS||it.artM||it.artL||it.artXL||it.artXXL||it.masterCode||'';
+    console.log(`[RP STICKER] "${_nm}"|"${_col}" rpd="${_rpd}" → art="${masterArt}"`);
     const sizeArt=sz=>dcMap[`${_rpd}|${_col}|${sz}`]
       ||(_rpd2&&_rpd2!==_rpd&&dcMap[`${_rpd2}|${_col}|${sz}`])
       ||masterArt;
