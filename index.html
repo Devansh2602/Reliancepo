@@ -942,18 +942,26 @@ function openModal(){
       location:r._loc||''
     };
     // capture article code for this size from PRODUCT_CODE and per-size EAN
-    const pc=String(r['PRODUCT_CODE']||'');
+    const pc=String(r['PRODUCT_CODE']||'').trim();
     const en=String(r['EAN_NO']||'');
     const s=+r.S||0,m=+r.M||0,l=+r.L||0,xl=+r.XL||0,xxl=+r.XXL||0;
     const pd=String(r['PRODUCT_DESCRIPTION']||'');
-    // extract RP description = everything before first ', ' (same for all sizes of same article)
+    const _isRPRow=String(r['Order type']||'').trim().toUpperCase()==='RP';
+    const _rpdVal=String(r['RP DESCRPTION']||'').trim();
+    // extract RP description = everything before first ', '
     if(pd&&!im[k].rpDesc)im[k].rpDesc=pd.split(', ')[0]||pd;
-    if(!im[k].rpDescCol&&r['RP DESCRPTION'])im[k].rpDescCol=String(r['RP DESCRPTION']||'');
-    if(s>0&&!im[k].artS){im[k].artS=pc;if(en)im[k].eanS=en;if(pd)im[k].pdescS=pd;}
-    if(m>0&&!im[k].artM){im[k].artM=pc;if(en)im[k].eanM=en;if(pd)im[k].pdescM=pd;}
-    if(l>0&&!im[k].artL){im[k].artL=pc;if(en)im[k].eanL=en;if(pd)im[k].pdescL=pd;}
-    if(xl>0&&!im[k].artXL){im[k].artXL=pc;if(en)im[k].eanXL=en;if(pd)im[k].pdescXL=pd;}
-    if(xxl>0&&!im[k].artXXL){im[k].artXXL=pc;if(en)im[k].eanXXL=en;if(pd)im[k].pdescXXL=pd;}
+    // rpDescCol: RP-type rows always override DC rows; never accept 'NOT FOUND'
+    if(_rpdVal&&_rpdVal!=='NOT FOUND'){
+      if(!im[k].rpDescCol||(_isRPRow&&!im[k]._rpDescFromRP)){
+        im[k].rpDescCol=_rpdVal;im[k]._rpDescFromRP=_isRPRow;
+      }
+    }
+    // art*/ean*/pdesc*: RP-type row's PRODUCT_CODE takes priority over DC code
+    if(s>0&&pc&&(!im[k].artS||(_isRPRow&&!im[k]._artSRP))){im[k].artS=pc;im[k]._artSRP=_isRPRow;if(en)im[k].eanS=en;if(pd)im[k].pdescS=pd;}
+    if(m>0&&pc&&(!im[k].artM||(_isRPRow&&!im[k]._artMRP))){im[k].artM=pc;im[k]._artMRP=_isRPRow;if(en)im[k].eanM=en;if(pd)im[k].pdescM=pd;}
+    if(l>0&&pc&&(!im[k].artL||(_isRPRow&&!im[k]._artLRP))){im[k].artL=pc;im[k]._artLRP=_isRPRow;if(en)im[k].eanL=en;if(pd)im[k].pdescL=pd;}
+    if(xl>0&&pc&&(!im[k].artXL||(_isRPRow&&!im[k]._artXLRP))){im[k].artXL=pc;im[k]._artXLRP=_isRPRow;if(en)im[k].eanXL=en;if(pd)im[k].pdescXL=pd;}
+    if(xxl>0&&pc&&(!im[k].artXXL||(_isRPRow&&!im[k]._artXXLRP))){im[k].artXXL=pc;im[k]._artXXLRP=_isRPRow;if(en)im[k].eanXXL=en;if(pd)im[k].pdescXXL=pd;}
     if(!im[k].prodDesc){
       const _d=String(r['PRODUCT_DESCRIPTION']||'');
       const _p=_d.split(', ');
