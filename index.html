@@ -1472,6 +1472,7 @@ function fillRPPLSheet(wb,P){
     }
   });
   console.log('[RP ART] rpMap:',Object.keys(_rpArtMap).length,'nameRp:',Object.keys(_nameRpMap).length,'dcMap:',Object.keys(_dcArtMap).length,'nameDc:',Object.keys(_nameDcMap).length);
+  console.log('[RP ART] nameDcMap keys:',Object.keys(_nameDcMap).slice(0,30));
   let dr=26,totalCtns=0,totalPcs=0;
   const totS={S:0,M:0,L:0,XL:0,XXL:0};
   items.forEach(it=>{
@@ -1489,12 +1490,15 @@ function fillRPPLSheet(wb,P){
       ||(_rpd2&&_rpd2!==_rpd&&_rpArtMap[`${_rpd2}|${_col}`])
       ||_nameRpMap[`${_nm}|${_col}`]
       ||it.artS||it.artM||it.artL||it.artXL||it.artXXL||it.masterCode||'';
-    console.log(`[RP ART] "${_nm}"|"${_col}" rpd="${_rpd}" → art="${masterArt}"`);
+    console.log(`[RP ART] "${_nm}"|"${_col}" rpd="${_rpd}" rpd2="${_rpd2}" → masterArt="${masterArt}"`);
     // col3 size rows = DC PRODUCT_CODE
-    const sizeArt=sz=>_dcArtMap[`${_rpd}|${_col}|${sz}`]
-      ||(_rpd2&&_rpd2!==_rpd&&_dcArtMap[`${_rpd2}|${_col}|${sz}`])
-      ||_nameDcMap[`${_nm}|${_col}|${sz}`]
-      ||masterArt;
+    const sizeArt=sz=>{
+      const r1=_dcArtMap[`${_rpd}|${_col}|${sz}`];
+      const r2=_rpd2&&_rpd2!==_rpd&&_dcArtMap[`${_rpd2}|${_col}|${sz}`];
+      const r3=_nameDcMap[`${_nm}|${_col}|${sz}`];
+      console.log(`[SIZEART] sz=${sz} dcMap="${r1||''}" dcMap2="${r2||''}" nameDc="${r3||''}" key="${_nm}|${_col}|${sz}"`);
+      return r1||r2||r3||masterArt;
+    };
     // col4 = RP description = part before first ', ' in PRODUCT_DESCRIPTION (e.g. "KRTS-APWN26-GETKRTSFUT6125")
     const hdrDesc=it.pdescS||it.prodDesc||it.desc||'';
     const sizeDesc=()=>it.rpDescCol||it.rpDesc||it.desc||'';
