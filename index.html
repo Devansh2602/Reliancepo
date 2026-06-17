@@ -1467,9 +1467,14 @@ function fillRPPLSheet(wb,P){
     SIZES.forEach(sz=>totS[sz]+=packQty);
     // col3 header = RP PRODUCT_CODE (looked up by RP DESCRPTION + Colour from RP rows)
     const _rpd=String(it.rpDescCol||'').trim(),_col=String(it.colour||'').trim();
-    const masterArt=_rpArtMap[`${_rpd}|${_col}`]||it.artS||it.artM||it.artL||it.artXL||it.artXXL||'';
+    const _rpd2=String(it.rpDesc||'').trim(); // fallback key from PRODUCT_DESCRIPTION prefix
+    const masterArt=_rpArtMap[`${_rpd}|${_col}`]
+      ||(_rpd2&&_rpd2!==_rpd&&_rpArtMap[`${_rpd2}|${_col}`])
+      ||it.artS||it.artM||it.artL||it.artXL||it.artXXL||it.masterCode||'';
     // col3 size rows = DC PRODUCT_CODE looked up by RP DESCRPTION + Colour + size column
-    const sizeArt=sz=>_dcArtMap[`${_rpd}|${_col}|${sz}`]||masterArt;
+    const sizeArt=sz=>_dcArtMap[`${_rpd}|${_col}|${sz}`]
+      ||(_rpd2&&_rpd2!==_rpd&&_dcArtMap[`${_rpd2}|${_col}|${sz}`])
+      ||masterArt;
     // col4 = RP description = part before first ', ' in PRODUCT_DESCRIPTION (e.g. "KRTS-APWN26-GETKRTSFUT6125")
     const hdrDesc=it.pdescS||it.prodDesc||it.desc||'';
     const sizeDesc=()=>it.rpDescCol||it.rpDesc||it.desc||'';
@@ -2106,8 +2111,13 @@ function computeRPCartons(items,packsPerCtn){
   items.forEach(it=>{
     const pq=it.S||it.M||it.L||it.XL||it.XXL||0; if(!pq)return;
     const _rpd=String(it.rpDescCol||'').trim(),_col=String(it.colour||'').trim();
-    const masterArt=rpMap[`${_rpd}|${_col}`]||it.artS||it.artM||it.artL||it.artXL||it.artXXL||'';
-    const sizeArt=sz=>dcMap[`${_rpd}|${_col}|${sz}`]||masterArt;
+    const _rpd2=String(it.rpDesc||'').trim(); // fallback key from PRODUCT_DESCRIPTION prefix
+    const masterArt=rpMap[`${_rpd}|${_col}`]
+      ||(_rpd2&&_rpd2!==_rpd&&rpMap[`${_rpd2}|${_col}`])
+      ||it.artS||it.artM||it.artL||it.artXL||it.artXXL||it.masterCode||'';
+    const sizeArt=sz=>dcMap[`${_rpd}|${_col}|${sz}`]
+      ||(_rpd2&&_rpd2!==_rpd&&dcMap[`${_rpd2}|${_col}|${sz}`])
+      ||masterArt;
     const packEan=masterArt,perSizeEans={};
     SZ.forEach(sz=>{perSizeEans[sz]=sizeArt(sz);});
     const mk=packs=>{
