@@ -1446,10 +1446,11 @@ function fillRPPLSheet(wb,P){
   const SIZES=['S','M','L','XL','XXL'];
   const artK={S:'artS',M:'artM',L:'artL',XL:'artXL',XXL:'artXXL'};
   // pre-build indexes from ALL rows
-  // _rpArtMap: "{rpDesc}|{colour}" → RP PRODUCT_CODE
-  // _nameRpMap: "{styleName}|{colour}" → RP PRODUCT_CODE  (direct fallback when rpDesc blank)
-  // _dcArtMap: "{rpDesc}|{colour}|{size}" → DC PRODUCT_CODE
-  const _rpArtMap={},_nameRpMap={},_dcArtMap={};
+  // _rpArtMap:   "{rpDesc}|{colour}"       → RP PRODUCT_CODE
+  // _nameRpMap:  "{styleName}|{colour}"    → RP PRODUCT_CODE (fallback when rpDesc blank)
+  // _dcArtMap:   "{rpDesc}|{colour}|{sz}"  → DC PRODUCT_CODE
+  // _nameDcMap:  "{styleName}|{colour}|{sz}"→ DC PRODUCT_CODE (fallback when rpDesc blank)
+  const _rpArtMap={},_nameRpMap={},_dcArtMap={},_nameDcMap={};
   (typeof ALL!=='undefined'?ALL:FD||[]).forEach(r=>{
     const _rpd=String(r['RP DESCRPTION']||'').trim();
     const _col=String(r['Colour']||r._colour||'').trim();
@@ -1459,20 +1460,18 @@ function fillRPPLSheet(wb,P){
     const _isRPType=_ot==='RP'||_ot==='RATIO';
     if(!_pc)return;
     if(_isRPType){
-      if(_rpd&&_rpd!=='NOT FOUND'){
-        const k=`${_rpd}|${_col}`;if(!_rpArtMap[k])_rpArtMap[k]=_pc;
-      }
-      // always index by name+colour so we find it even when rpDesc is blank/NOT FOUND
+      if(_rpd&&_rpd!=='NOT FOUND'){const k=`${_rpd}|${_col}`;if(!_rpArtMap[k])_rpArtMap[k]=_pc;}
       if(_nm){const kn=`${_nm}|${_col}`;if(!_nameRpMap[kn])_nameRpMap[kn]=_pc;}
     } else if(_ot==='DC'){
-      if(_rpd&&_rpd!=='NOT FOUND'){
-        ['S','M','L','XL','XXL'].forEach(sz=>{
-          if((+r[sz]||0)>0){const k=`${_rpd}|${_col}|${sz}`;if(!_dcArtMap[k])_dcArtMap[k]=_pc;}
-        });
-      }
+      ['S','M','L','XL','XXL'].forEach(sz=>{
+        if((+r[sz]||0)>0){
+          if(_rpd&&_rpd!=='NOT FOUND'){const k=`${_rpd}|${_col}|${sz}`;if(!_dcArtMap[k])_dcArtMap[k]=_pc;}
+          if(_nm){const kn=`${_nm}|${_col}|${sz}`;if(!_nameDcMap[kn])_nameDcMap[kn]=_pc;}
+        }
+      });
     }
   });
-  console.log('[RP ART] rpMap:',Object.keys(_rpArtMap).length,'nameMap:',Object.keys(_nameRpMap).length,'dcMap:',Object.keys(_dcArtMap).length);
+  console.log('[RP ART] rpMap:',Object.keys(_rpArtMap).length,'nameRp:',Object.keys(_nameRpMap).length,'dcMap:',Object.keys(_dcArtMap).length,'nameDc:',Object.keys(_nameDcMap).length);
   let dr=26,totalCtns=0,totalPcs=0;
   const totS={S:0,M:0,L:0,XL:0,XXL:0};
   items.forEach(it=>{
@@ -1494,6 +1493,7 @@ function fillRPPLSheet(wb,P){
     // col3 size rows = DC PRODUCT_CODE
     const sizeArt=sz=>_dcArtMap[`${_rpd}|${_col}|${sz}`]
       ||(_rpd2&&_rpd2!==_rpd&&_dcArtMap[`${_rpd2}|${_col}|${sz}`])
+      ||_nameDcMap[`${_nm}|${_col}|${sz}`]
       ||masterArt;
     // col4 = RP description = part before first ', ' in PRODUCT_DESCRIPTION (e.g. "KRTS-APWN26-GETKRTSFUT6125")
     const hdrDesc=it.pdescS||it.prodDesc||it.desc||'';
@@ -2120,7 +2120,7 @@ function computeDCCartons(items,ppb){
 function computeRPCartons(items,packsPerCtn){
   const SZ=['S','M','L','XL','XXL'];
   const cartons=[]; let ctnNo=0;
-  const rpMap={},nameRpMap={},dcMap={};
+  const rpMap={},nameRpMap={},dcMap={},nameDcMap={};
   (typeof ALL!=='undefined'?ALL:FD||[]).forEach(r=>{
     const rpd=String(r['RP DESCRPTION']||'').trim(),col=String(r['Colour']||r._colour||'').trim();
     const pc=String(r['PRODUCT_CODE']||'').trim(),ot=String(r['Order type']||'').trim().toUpperCase();
@@ -2131,7 +2131,12 @@ function computeRPCartons(items,packsPerCtn){
       if(rpd&&rpd!=='NOT FOUND'){const k=`${rpd}|${col}`;if(!rpMap[k])rpMap[k]=pc;}
       if(nm){const kn=`${nm}|${col}`;if(!nameRpMap[kn])nameRpMap[kn]=pc;}
     } else if(ot==='DC'){
-      if(rpd&&rpd!=='NOT FOUND'){SZ.forEach(sz=>{if((+r[sz]||0)>0){const k=`${rpd}|${col}|${sz}`;if(!dcMap[k])dcMap[k]=pc;}});}
+      SZ.forEach(sz=>{
+        if((+r[sz]||0)>0){
+          if(rpd&&rpd!=='NOT FOUND'){const k=`${rpd}|${col}|${sz}`;if(!dcMap[k])dcMap[k]=pc;}
+          if(nm){const kn=`${nm}|${col}|${sz}`;if(!nameDcMap[kn])nameDcMap[kn]=pc;}
+        }
+      });
     }
   });
   console.log('[RP STICKER] rpMap:',Object.keys(rpMap).length,'nameMap:',Object.keys(nameRpMap).length);
@@ -2146,6 +2151,7 @@ function computeRPCartons(items,packsPerCtn){
     console.log(`[RP STICKER] "${_nm}"|"${_col}" rpd="${_rpd}" → art="${masterArt}"`);
     const sizeArt=sz=>dcMap[`${_rpd}|${_col}|${sz}`]
       ||(_rpd2&&_rpd2!==_rpd&&dcMap[`${_rpd2}|${_col}|${sz}`])
+      ||nameDcMap[`${_nm}|${_col}|${sz}`]
       ||masterArt;
     const packEan=masterArt,perSizeEans={};
     SZ.forEach(sz=>{perSizeEans[sz]=sizeArt(sz);});
