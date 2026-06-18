@@ -962,10 +962,10 @@ function openModal(){
     if(l>0&&pc&&(!im[k].artL||(_isRPRow&&!im[k]._artLRP))){im[k].artL=pc;im[k]._artLRP=_isRPRow;if(en)im[k].eanL=en;if(pd)im[k].pdescL=pd;}
     if(xl>0&&pc&&(!im[k].artXL||(_isRPRow&&!im[k]._artXLRP))){im[k].artXL=pc;im[k]._artXLRP=_isRPRow;if(en)im[k].eanXL=en;if(pd)im[k].pdescXL=pd;}
     if(xxl>0&&pc&&(!im[k].artXXL||(_isRPRow&&!im[k]._artXXLRP))){im[k].artXXL=pc;im[k]._artXXLRP=_isRPRow;if(en)im[k].eanXXL=en;if(pd)im[k].pdescXXL=pd;}
-    if(!im[k].prodDesc){
+    if(!im[k].prodDesc&&!_isRPRow){
       const _d=String(r['PRODUCT_DESCRIPTION']||'');
       const _p=_d.split(', ');
-      im[k].prodDesc=_p.length>=2?_p[0]:_d;
+      if(_p.length>=2)im[k].prodDesc=_p[0];
     }
     im[k].oS+=s;im[k].oM+=m;im[k].oL+=l;im[k].oXL+=xl;im[k].oXXL+=xxl;
   });
@@ -1499,8 +1499,8 @@ function fillRPPLSheet(wb,P){
       console.log(`[SIZEART] sz=${sz} dcMap="${r1||''}" dcMap2="${r2||''}" nameDc="${r3||''}" key="${_nm}|${_col}|${sz}"`);
       return r1||r2||r3||masterArt;
     };
-    // col4 = RP description = part before first ', ' in PRODUCT_DESCRIPTION (e.g. "KRTS-APWN26-GETKRTSFUT6125")
-    const hdrDesc=it.pdescS||it.prodDesc||it.desc||'';
+    // col4 = RP description — prefer rpDescCol (RP DESCRPTION col), fall back to prodDesc/desc
+    const hdrDesc=it.rpDescCol||it.prodDesc||it.desc||'';
     const sizeDesc=()=>it.rpDescCol||it.rpDesc||it.desc||'';
     // bulk group header row
     // BANGALORE: carton# in header; HARIPAL/JHAJJAR: carton# in S row
