@@ -1447,18 +1447,22 @@ function fillRPPLSheet(wb,P){
   const artK={S:'artS',M:'artM',L:'artL',XL:'artXL',XXL:'artXXL'};
   // pre-build indexes from ALL rows
   // _rpArtMap:   "{rpDesc}|{colour}"       → RP PRODUCT_CODE
-  // _nameRpMap:  "{styleName}|{colour}"    → RP PRODUCT_CODE (fallback when rpDesc blank)
-  // _dcArtMap:   "{rpDesc}|{colour}|{sz}"  → DC PRODUCT_CODE
-  // _nameDcMap:  "{styleName}|{colour}|{sz}"→ DC PRODUCT_CODE (fallback when rpDesc blank)
-  const _rpArtMap={},_nameRpMap={},_dcArtMap={},_nameDcMap={};
+  // _nameRpMap:   "{styleName}|{colour}"     → RP PRODUCT_CODE (fallback when rpDesc blank)
+  // _dcArtMap:    "{rpDesc}|{colour}|{sz}"   → DC PRODUCT_CODE
+  // _nameDcMap:   "{styleName}|{colour}|{sz}"→ DC PRODUCT_CODE (fallback when rpDesc blank)
+  // _rpdByMaster: "{masterCode}|{colour}"    → RP DESCRPTION  (fallback when FD has no DC rows)
+  const _rpArtMap={},_nameRpMap={},_dcArtMap={},_nameDcMap={},_rpdByMaster={};
   (typeof ALL!=='undefined'?ALL:FD||[]).forEach(r=>{
     const _rpd=String(r['RP DESCRPTION']||'').trim();
     const _col=String(r['Colour']||r._colour||'').trim();
     const _pc=String(r['PRODUCT_CODE']||'').trim();
     const _nm=String(r._name||r['SKU']||'').trim();
+    const _mc=String(r['MASTER PRODUCT CODE']||'').trim();
     const _ot=String(r['Order type']||'').trim().toUpperCase();
     const _isRPType=_ot==='RP'||_ot==='RATIO';
     if(!_pc)return;
+    // build rpDesc lookup by masterCode|colour (for items where FD has no DC rows)
+    if(_rpd&&_rpd!=='NOT FOUND'&&_mc){const km=`${_mc}|${_col}`;if(!_rpdByMaster[km])_rpdByMaster[km]=_rpd;}
     if(_isRPType){
       if(_rpd&&_rpd!=='NOT FOUND'){const k=`${_rpd}|${_col}`;if(!_rpArtMap[k])_rpArtMap[k]=_pc;}
       if(_nm){const kn=`${_nm}|${_col}`;if(!_nameRpMap[kn])_nameRpMap[kn]=_pc;}
@@ -1471,8 +1475,6 @@ function fillRPPLSheet(wb,P){
       });
     }
   });
-  console.log('[RP ART] rpMap:',Object.keys(_rpArtMap).length,'nameRp:',Object.keys(_nameRpMap).length,'dcMap:',Object.keys(_dcArtMap).length,'nameDc:',Object.keys(_nameDcMap).length);
-  console.log('[RP ART] nameDcMap keys:',Object.keys(_nameDcMap).slice(0,30));
   let dr=26,totalCtns=0,totalPcs=0;
   const totS={S:0,M:0,L:0,XL:0,XXL:0};
   items.forEach(it=>{
@@ -1490,18 +1492,17 @@ function fillRPPLSheet(wb,P){
       ||(_rpd2&&_rpd2!==_rpd&&_rpArtMap[`${_rpd2}|${_col}`])
       ||_nameRpMap[`${_nm}|${_col}`]
       ||it.artS||it.artM||it.artL||it.artXL||it.artXXL||it.masterCode||'';
-    console.log(`[RP ART] "${_nm}"|"${_col}" rpd="${_rpd}" rpd2="${_rpd2}" → masterArt="${masterArt}"`);
     // col3 size rows = DC PRODUCT_CODE
     const sizeArt=sz=>{
       const r1=_dcArtMap[`${_rpd}|${_col}|${sz}`];
       const r2=_rpd2&&_rpd2!==_rpd&&_dcArtMap[`${_rpd2}|${_col}|${sz}`];
       const r3=_nameDcMap[`${_nm}|${_col}|${sz}`];
-      console.log(`[SIZEART] sz=${sz} dcMap="${r1||''}" dcMap2="${r2||''}" nameDc="${r3||''}" key="${_nm}|${_col}|${sz}"`);
       return r1||r2||r3||masterArt;
     };
     // col4 = RP description = part before first ', ' in PRODUCT_DESCRIPTION (e.g. "KRTS-APWN26-GETKRTSFUT6125")
     const hdrDesc=it.pdescS||it.prodDesc||it.desc||'';
-    const sizeDesc=()=>it.rpDescCol||it.rpDesc||it.desc||'';
+    const _mc=String(it.masterCode||'').trim();
+    const sizeDesc=()=>it.rpDescCol||_rpdByMaster[`${_mc}|${_col}`]||it.rpDesc||it.desc||'';
     // bulk group header row
     // BANGALORE: carton# in header; HARIPAL/JHAJJAR: carton# in S row
     if(loc==='BANGALORE')ws.getCell(dr,1).value=fullCtns;
@@ -2143,7 +2144,6 @@ function computeRPCartons(items,packsPerCtn){
       });
     }
   });
-  console.log('[RP STICKER] rpMap:',Object.keys(rpMap).length,'nameMap:',Object.keys(nameRpMap).length);
   items.forEach(it=>{
     const pq=it.S||it.M||it.L||it.XL||it.XXL||0; if(!pq)return;
     const _rpd=String(it.rpDescCol||'').trim(),_col=String(it.colour||'').trim();
@@ -2152,7 +2152,6 @@ function computeRPCartons(items,packsPerCtn){
       ||(_rpd2&&_rpd2!==_rpd&&rpMap[`${_rpd2}|${_col}`])
       ||nameRpMap[`${_nm}|${_col}`]
       ||it.artS||it.artM||it.artL||it.artXL||it.artXXL||it.masterCode||'';
-    console.log(`[RP STICKER] "${_nm}"|"${_col}" rpd="${_rpd}" → art="${masterArt}"`);
     const sizeArt=sz=>dcMap[`${_rpd}|${_col}|${sz}`]
       ||(_rpd2&&_rpd2!==_rpd&&dcMap[`${_rpd2}|${_col}|${sz}`])
       ||nameDcMap[`${_nm}|${_col}|${sz}`]
