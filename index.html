@@ -956,16 +956,17 @@ function openModal(){
         im[k].rpDescCol=_rpdVal;im[k]._rpDescFromRP=_isRPRow;
       }
     }
-    // art*/ean*/pdesc*: RP-type row's PRODUCT_CODE takes priority over DC code
-    if(s>0&&pc&&(!im[k].artS||(_isRPRow&&!im[k]._artSRP))){im[k].artS=pc;im[k]._artSRP=_isRPRow;if(en)im[k].eanS=en;if(pd)im[k].pdescS=pd;}
-    if(m>0&&pc&&(!im[k].artM||(_isRPRow&&!im[k]._artMRP))){im[k].artM=pc;im[k]._artMRP=_isRPRow;if(en)im[k].eanM=en;if(pd)im[k].pdescM=pd;}
-    if(l>0&&pc&&(!im[k].artL||(_isRPRow&&!im[k]._artLRP))){im[k].artL=pc;im[k]._artLRP=_isRPRow;if(en)im[k].eanL=en;if(pd)im[k].pdescL=pd;}
-    if(xl>0&&pc&&(!im[k].artXL||(_isRPRow&&!im[k]._artXLRP))){im[k].artXL=pc;im[k]._artXLRP=_isRPRow;if(en)im[k].eanXL=en;if(pd)im[k].pdescXL=pd;}
-    if(xxl>0&&pc&&(!im[k].artXXL||(_isRPRow&&!im[k]._artXXLRP))){im[k].artXXL=pc;im[k]._artXXLRP=_isRPRow;if(en)im[k].eanXXL=en;if(pd)im[k].pdescXXL=pd;}
-    if(!im[k].prodDesc&&!_isRPRow){
+    // art*/ean*: RP-type row's PRODUCT_CODE takes priority over DC code
+    // pdesc*: only set from DC rows (RP rows have badly-formatted PRODUCT_DESCRIPTION)
+    if(s>0&&pc&&(!im[k].artS||(_isRPRow&&!im[k]._artSRP))){im[k].artS=pc;im[k]._artSRP=_isRPRow;if(en)im[k].eanS=en;if(pd&&!_isRPRow)im[k].pdescS=pd;}
+    if(m>0&&pc&&(!im[k].artM||(_isRPRow&&!im[k]._artMRP))){im[k].artM=pc;im[k]._artMRP=_isRPRow;if(en)im[k].eanM=en;if(pd&&!_isRPRow)im[k].pdescM=pd;}
+    if(l>0&&pc&&(!im[k].artL||(_isRPRow&&!im[k]._artLRP))){im[k].artL=pc;im[k]._artLRP=_isRPRow;if(en)im[k].eanL=en;if(pd&&!_isRPRow)im[k].pdescL=pd;}
+    if(xl>0&&pc&&(!im[k].artXL||(_isRPRow&&!im[k]._artXLRP))){im[k].artXL=pc;im[k]._artXLRP=_isRPRow;if(en)im[k].eanXL=en;if(pd&&!_isRPRow)im[k].pdescXL=pd;}
+    if(xxl>0&&pc&&(!im[k].artXXL||(_isRPRow&&!im[k]._artXXLRP))){im[k].artXXL=pc;im[k]._artXXLRP=_isRPRow;if(en)im[k].eanXXL=en;if(pd&&!_isRPRow)im[k].pdescXXL=pd;}
+    if(!im[k].prodDesc){
       const _d=String(r['PRODUCT_DESCRIPTION']||'');
       const _p=_d.split(', ');
-      if(_p.length>=2)im[k].prodDesc=_p[0];
+      im[k].prodDesc=_p.length>=2?_p[0]:_d;
     }
     im[k].oS+=s;im[k].oM+=m;im[k].oL+=l;im[k].oXL+=xl;im[k].oXXL+=xxl;
   });
@@ -1499,8 +1500,8 @@ function fillRPPLSheet(wb,P){
       console.log(`[SIZEART] sz=${sz} dcMap="${r1||''}" dcMap2="${r2||''}" nameDc="${r3||''}" key="${_nm}|${_col}|${sz}"`);
       return r1||r2||r3||masterArt;
     };
-    // col4 = RP description — prefer rpDescCol (RP DESCRPTION col), fall back to prodDesc/desc
-    const hdrDesc=it.rpDescCol||it.prodDesc||it.desc||'';
+    // col4 = RP description = part before first ', ' in PRODUCT_DESCRIPTION (e.g. "KRTS-APWN26-GETKRTSFUT6125")
+    const hdrDesc=it.pdescS||it.prodDesc||it.desc||'';
     const sizeDesc=()=>it.rpDescCol||it.rpDesc||it.desc||'';
     // bulk group header row
     // BANGALORE: carton# in header; HARIPAL/JHAJJAR: carton# in S row
